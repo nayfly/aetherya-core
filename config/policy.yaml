@@ -1,0 +1,34 @@
+version: 1
+
+modes:
+  consultive:
+    default_state: log_only
+    thresholds:
+      deny_at: 90
+      confirm_at: 60
+      log_only_at: 0
+
+  operative:
+    default_state: allow
+    thresholds:
+      deny_at: 80
+      confirm_at: 50
+      log_only_at: 0
+
+aggregator:
+  weights:
+    procedural_guard: 1.0
+    constitution: 1.0
+  hard_deny_if:
+    - critical_tag_detected
+
+procedural_guard:
+  critical_tags:
+    - "rm -rf /"
+    - "mkfs"
+    - ":(){:|:&};:"   # fork bomb clásica
+  privileged_ops:
+    - "apt remove"
+    - "apt purge"
+    - "userdel"
+    - "chmod -R 777 /"

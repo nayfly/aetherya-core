@@ -1,0 +1,7 @@
+{
+  "allowed": false,
+  "mode": "operative",
+  "reason": "deny: destructive system command",
+  "risk_score": 90,
+  "violated_principle": "ProceduralSafety"
+}
