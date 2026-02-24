@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from aetherya.modes import Mode
 
@@ -13,23 +14,27 @@ class DecisionState(StrEnum):
 
 
 class PolicyEngine:
-    def evaluate(self, constitution_result: dict, mode: Mode) -> DecisionState:
-        # Si la Constitución prohíbe, se deniega siempre.
+    def _parse_risk(self, constitution_result: dict[str, Any]) -> int | None:
+        raw = constitution_result.get("risk_score", 0)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def evaluate(self, constitution_result: dict[str, Any], mode: Mode) -> DecisionState:
         if not constitution_result.get("allowed", False):
             return DecisionState.DENY
 
-        risk = int(constitution_result.get("risk_score", 0))
-
-        # Reglas por modo
         if mode == Mode.CONSULTIVE:
-            # En consultivo nunca ejecutas herramientas. Solo “permitir respuesta”.
             return DecisionState.LOG_ONLY
 
+        risk = self._parse_risk(constitution_result)
+        if risk is None:
+            return DecisionState.ESCALATE  # fail-closed
+
         if mode == Mode.OPERATIVE:
-            # Operativo: permites solo si riesgo bajo.
             if risk <= 20:
                 return DecisionState.ALLOW
             return DecisionState.ESCALATE
 
-        # Default seguro
         return DecisionState.ESCALATE
