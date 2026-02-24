@@ -43,3 +43,15 @@ source = ["src/aetherya"]
 fail_under = 90
 show_missing = true
 skip_covered = true
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "ruff",
+  "black",
+  "mypy",
+  "pyyaml",
+  "types-PyYAML",
+  "pre-commit",
+]
