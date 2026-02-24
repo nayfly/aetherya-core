@@ -55,3 +55,7 @@ dev = [
   "types-PyYAML",
   "pre-commit",
 ]
+
+[project]
+name = "aetherya-core"
+version = "0.1.0"
