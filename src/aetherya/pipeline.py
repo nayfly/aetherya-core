@@ -45,18 +45,21 @@ def _fail_closed(
     )
 
     if audit:
-        audit.log(
-            actor=actor,
-            action=raw_input,
-            decision=final.to_dict(),
-            context={
-                "mode": mode.value,
-                "stage": stage,
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-                "signals": [],
-            },
-        )
+        try:
+            audit.log(
+                actor=actor,
+                action=raw_input,
+                decision=final.to_dict(),
+                context={
+                    "mode": mode.value,
+                    "stage": stage,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "signals": [],
+                },
+            )
+        except Exception:
+            pass
 
     return final
 
@@ -74,14 +77,17 @@ def run_pipeline(
     # 1) Parse + modo (fail-closed si peta)
     try:
         action = parse_user_input(raw_input)
-        if action.mode_hint:
-            try:
-                mode = Mode(action.mode_hint)
-            except ValueError:
-                # modo inválido => default seguro
-                mode = Mode.CONSULTIVE
-        else:
-            mode = Mode.CONSULTIVE
+        try:
+            mode = Mode(action.mode_hint) if action.mode_hint else Mode.CONSULTIVE
+        except Exception as exc:  # ValueError típico
+            return _fail_closed(
+                raw_input=raw_input,
+                actor=actor,
+                mode=mode,
+                stage="mode",
+                exc=exc,
+                audit=audit,
+            )
     except Exception as exc:
         return _fail_closed(
             raw_input=raw_input,
@@ -176,14 +182,17 @@ def run_pipeline(
     )
 
     if audit:
-        audit.log(
-            actor=actor,
-            action=raw_input,
-            decision=final.to_dict(),
-            context={
-                "mode": mode.value,
-                "signals": [s.__dict__ for s in agg.breakdown],
-            },
-        )
+        try:
+            audit.log(
+                actor=actor,
+                action=raw_input,
+                decision=final.to_dict(),
+                context={
+                    "mode": mode.value,
+                    "signals": [s.__dict__ for s in agg.breakdown],
+                },
+            )
+        except Exception:
+            pass
 
     return final
