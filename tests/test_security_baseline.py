@@ -17,9 +17,8 @@ class _Decision:
 
 def test_resolve_attestation_key_prefers_explicit_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AETHERYA_ATTESTATION_KEY", "env-key")
-    assert (
-        security_baseline._resolve_attestation_key("explicit-key") == "explicit-key"
-    )  # noqa: SLF001
+    explicit = security_baseline._resolve_attestation_key("explicit-key")  # noqa: SLF001
+    assert explicit == "explicit-key"
     assert security_baseline._resolve_attestation_key(None) == "env-key"  # noqa: SLF001
 
 
