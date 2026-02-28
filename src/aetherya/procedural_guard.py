@@ -50,19 +50,19 @@ class ProceduralGuard:
     def evaluate(self, text: str) -> GuardResult | None:
         t = text.lower().strip()
 
-        # Ejemplo destructivo
-        if "rm -rf /" in t or "mkfs" in t:
-            return _validate_guard_result(
-                {
-                    "risk_score": 95,  # o 100 si quieres “hard”
-                    "reason": "destructive system command",
-                    "tags": ["data_destruction"],
-                    "confidence": 0.95,
-                }
-            )
+        for critical_tag in getattr(self.cfg, "critical_tags", []):
+            if critical_tag.lower() in t:
+                return _validate_guard_result(
+                    {
+                        "risk_score": 100,
+                        "reason": "destructive system command",
+                        "tags": ["critical_tag_detected", "data_destruction"],
+                        "confidence": 1.0,
+                    }
+                )
 
         # Ejemplo privileged ops
-        for op in self.cfg.privileged_ops:
+        for op in getattr(self.cfg, "privileged_ops", []):
             if "sudo" in t and op in t:
                 return _validate_guard_result(
                     {

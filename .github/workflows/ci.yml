@@ -34,6 +34,18 @@ jobs:
         run: |
           mypy src/aetherya
 
+      - name: Jailbreak Regression Suite
+        run: |
+          pytest tests/test_jailbreak_guard.py -q
+
+      - name: Capability Regression Suite
+        run: |
+          pytest tests/test_capability_gate.py tests/test_pipeline_capability_gate.py -q
+
+      - name: Confirmation Regression Suite
+        run: |
+          pytest tests/test_confirmation_gate.py tests/test_pipeline_confirmation_gate.py -q
+
       - name: Tests + Coverage
         run: |
           pytest --cov

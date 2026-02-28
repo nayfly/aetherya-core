@@ -1,9 +1,9 @@
 # ÆTHERYA – Deterministic Ethical Decision Core
 
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
-![Coverage](https://img.shields.io/badge/coverage-92%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.1.0-informational)
+![Version](https://img.shields.io/badge/version-0.3.0-informational)
 
 A deterministic, risk-aware policy engine for evaluating actions under constitutional constraints and procedural safeguards.
 
@@ -83,8 +83,9 @@ Snapshot-friendly output:
 - Typed pipeline (mypy clean)
 - Ruff + Black enforced
 - Snapshot testing
-- Coverage enforced (>90%)
+- Coverage enforced (>=99%)
 - CI validated on every push
+- Audit traceability with deterministic `decision_id` + `context_hash`
 - Versioned baseline (`v0.1.0`)
 
 ## Installation
@@ -101,7 +102,7 @@ pytest --cov
 
 ## Status
 
-`v0.1.0` – Stable baseline with deterministic policy pipeline.
+`v0.3.0` – Stable baseline with deterministic policy pipeline.
 
 ## Design Principles
 

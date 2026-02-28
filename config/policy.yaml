@@ -17,10 +17,16 @@ modes:
 
 aggregator:
   weights:
+    execution_gate: 1.0
+    capability_gate: 1.0
+    jailbreak_guard: 1.0
     procedural_guard: 1.0
     constitution: 1.0
   hard_deny_if:
     - critical_tag_detected
+    - "tag:jailbreak_attempt"
+    - "tag:tool_not_allowed"
+    - "tag:capability_tool_denied"
 
 procedural_guard:
   critical_tags:
@@ -32,3 +38,67 @@ procedural_guard:
     - "apt purge"
     - "userdel"
     - "chmod -R 777 /"
+
+execution_gate:
+  enabled: true
+  allowed_tools:
+    - shell
+    - http
+    - filesystem
+  require_target_for_operate: false
+  required_parameters:
+    shell:
+      - command
+  allowed_parameters:
+    shell:
+      - command
+      - timeout
+    http:
+      - method
+      - url
+      - body
+    filesystem:
+      - path
+      - operation
+      - confirm_token
+      - confirm_context
+
+capability_matrix:
+  enabled: true
+  default_allow: false
+  roles:
+    operator:
+      tools:
+        - shell
+        - http
+        - filesystem
+      operations:
+        - read
+        - write
+        - append
+        - list
+        - request
+        - command
+  actors:
+    robert:
+      roles:
+        - operator
+      tools: []
+      operations: []
+
+confirmation:
+  enabled: true
+  on_confirmed: allow
+  require_for:
+    decisions:
+      - require_confirm
+    tools: []
+    operations:
+      - delete
+      - write
+    min_risk_score: 0
+  evidence:
+    token_param: confirm_token
+    context_param: confirm_context
+    token_pattern: "^ack:[a-z0-9_-]{8,}$"
+    min_context_length: 12

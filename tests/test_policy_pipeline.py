@@ -51,6 +51,12 @@ def test_privileged_pkg_removal_is_not_auto_allowed(tmp_path):
     audit = AuditLogger(tmp_path / "decisions.jsonl")
     core = make_core(audit)
 
-    decision = run_pipeline("sudo apt remove docker", constitution=core, actor="robert", cfg=cfg)
+    decision = run_pipeline(
+        "mode:operative tool:shell target:local param.command=sudo_apt_remove_docker "
+        "sudo apt remove docker",
+        constitution=core,
+        actor="robert",
+        cfg=cfg,
+    )
     assert decision.allowed is False  # no ejecución automática
     assert decision.violated_principle == "ProceduralSafety"

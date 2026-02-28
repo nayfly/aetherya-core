@@ -1,3 +1,4 @@
+from aetherya.actions import POLICY_ABI_VERSION
 from aetherya.audit import AuditLogger
 from aetherya.config import load_policy_config
 from aetherya.constitution import Constitution, Principle
@@ -28,8 +29,12 @@ def test_decision_identity_snapshot(tmp_path):
         "allowed": False,
         "violated_principle": "ProceduralSafety",
         "mode": "operative",
+        "state": "hard_deny",
+        "abi_version": POLICY_ABI_VERSION,
     }
 
     assert decision.allowed == snapshot["allowed"]
     assert decision.violated_principle == snapshot["violated_principle"]
     assert decision.mode == snapshot["mode"]
+    assert decision.state == snapshot["state"]
+    assert decision.abi_version == snapshot["abi_version"]

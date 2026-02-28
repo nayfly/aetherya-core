@@ -1,7 +1,9 @@
 {
+  "abi_version": "v1",
   "allowed": false,
   "mode": "operative",
-  "reason": "deny: destructive system command",
-  "risk_score": 90,
+  "reason": "hard_deny: destructive system command",
+  "risk_score": 150,
+  "state": "hard_deny",
   "violated_principle": "ProceduralSafety"
 }
