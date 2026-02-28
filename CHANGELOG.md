@@ -25,6 +25,13 @@ All notable changes to this project are documented in this file.
   - Phase 2 deterministic integrity fuzz campaign (1,000-event default)
   - Phase 3 signed release manifest generation (HMAC)
 - `security_gate` supports optional `--failure-report-dir` to emit explainability HTML for failing corpus cases.
+- Added `policy_decision_adapter` module with a decoupled integration contract for future external intelligence providers (LLM/vector retrieval):
+  - `PolicyDecisionRequest` / `PolicyDecisionResponse`
+  - `PolicySignalCandidate` / `PolicyDecisionCandidate`
+  - `PolicyDecisionAdapter` protocol + deterministic `DryRunPolicyDecisionAdapter`
+
+### Changed
+- CI workflow now runs `security_gate` in a dedicated job and enforces tag release readiness (`v*`) via `release_readiness` depending on `test` + `security_gate`.
 
 ## v0.3.0 - 2026-02-28
 

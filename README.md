@@ -3,7 +3,7 @@
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.3.0-informational)
+![Version](https://img.shields.io/badge/version-0.4.0-informational)
 
 A deterministic, risk-aware policy engine for evaluating actions under constitutional constraints and procedural safeguards.
 
@@ -93,6 +93,14 @@ Deterministic provider contract before real LLM integration:
 - `DryRunLLMProvider` for safe local simulations (no external calls)
 - `llm_shadow` mode in pipeline for non-executing telemetry
 
+### Policy Decision Adapter (Decoupled Contract)
+
+Future-proof adapter layer for external context engines (LLM, vector DB, etc.) without coupling runtime execution:
+- `PolicyDecisionRequest` / `PolicyDecisionResponse` typed contracts
+- `PolicySignalCandidate` and `PolicyDecisionCandidate` for external suggestions
+- `PolicyDecisionAdapter` protocol + `ensure_policy_decision_adapter` contract guard
+- `DryRunPolicyDecisionAdapter` deterministic reference implementation
+
 ## Quality Guarantees
 
 - Typed pipeline (mypy clean)
@@ -100,8 +108,9 @@ Deterministic provider contract before real LLM integration:
 - Snapshot testing
 - Coverage enforced (>=99%)
 - CI validated on every push
+- Dedicated `security_gate` CI job with release-time dependency (`release_readiness` on tags `v*`)
 - Audit traceability with deterministic `decision_id` + `context_hash`
-- Versioned baseline (`v0.3.0`)
+- Versioned baseline (`v0.4.0`)
 
 ## Installation
 
@@ -180,9 +189,11 @@ Optional HTML reports for corpus failures:
 AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.security_gate --failure-report-dir audit/security_gate/fail_reports
 ```
 
+In CI, `security_gate` runs as an explicit job and tag releases (`v*`) are blocked unless both `test` and `security_gate` pass.
+
 ## Status
 
-`v0.3.0` – Stable baseline with deterministic policy pipeline.
+`v0.4.0` – Stable baseline with deterministic policy pipeline, explainability and security gate.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release details.
 
