@@ -7,9 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 _ALLOWED_MODES = frozenset({"consultive", "operative"})
-_ALLOWED_DECISION_STATES = frozenset(
-    {"allow", "log_only", "require_confirm", "deny", "hard_deny"}
-)
+_ALLOWED_DECISION_STATES = frozenset({"allow", "log_only", "require_confirm", "deny", "hard_deny"})
 
 
 def _normalize_payload(value: Any) -> Any:
