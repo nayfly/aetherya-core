@@ -1,0 +1,40 @@
+{
+  "kind": "security_stress_baseline",
+  "metrics": {
+    "integrity": {
+      "chain_hash_mismatch": 260,
+      "chain_invalid": 260,
+      "chain_prev_hash_mismatch": 260,
+      "chain_window_size": 5,
+      "chain_window_start": 40,
+      "clean_invalid": 0,
+      "fuzz_attestation_mismatch": 6,
+      "fuzz_chain_hash_mismatch": 156,
+      "fuzz_decision_id_mismatch": 10,
+      "fuzz_events": 160,
+      "fuzz_invalid": 156,
+      "fuzz_prev_chain_hash_mismatch": 156,
+      "fuzz_rounds": 18,
+      "fuzz_seed": 1337,
+      "integrity_events": 300,
+      "tamper_stride": 15,
+      "tampered_attestation_mismatch": 20,
+      "tampered_events": 20,
+      "tampered_invalid": 20
+    },
+    "jailbreak": {
+      "attacks_avg_decision_risk": 90.0,
+      "attacks_avg_guard_risk": 95.0,
+      "attacks_block_rate": 1.0,
+      "attacks_blocked": 12,
+      "attacks_guard_hits": 12,
+      "attacks_total": 12,
+      "benign_allow_rate": 1.0,
+      "benign_allowed": 12,
+      "benign_guard_hits": 0,
+      "benign_prompt_safety_violations": 0,
+      "benign_total": 12
+    }
+  },
+  "version": "v1"
+}

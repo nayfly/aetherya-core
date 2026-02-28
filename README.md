@@ -130,6 +130,12 @@ Run dedicated stress suites:
 pytest tests/test_audit_integrity_stress.py tests/test_audit_tamper_campaign.py tests/test_jailbreak_guard_stress.py tests/test_security_corpus_regression.py -q
 ```
 
+Run versioned security baseline regression (single command used in local + CI):
+
+```bash
+make security_baseline
+```
+
 ## Render Explainability Graph
 
 Generate Mermaid from the latest audit event:
@@ -190,6 +196,28 @@ AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.security_gate --failure-r
 ```
 
 In CI, `security_gate` runs as an explicit job and tag releases (`v*`) are blocked unless both `test` and `security_gate` pass.
+
+## Versioned Security Baseline
+
+`security_baseline` validates deterministic stress metrics against a versioned snapshot:
+- jailbreak attack/benign regression rates
+- audit integrity tamper detection baseline
+- deterministic fuzz campaign mismatch profile
+
+Snapshot path:
+- `tests/fixtures/security_baseline/v1/stress_baseline.json`
+
+CLI:
+
+```bash
+python -m aetherya.security_baseline --baseline-path tests/fixtures/security_baseline/v1/stress_baseline.json
+```
+
+Update snapshot intentionally:
+
+```bash
+python -m aetherya.security_baseline --update-baseline
+```
 
 ## Status
 

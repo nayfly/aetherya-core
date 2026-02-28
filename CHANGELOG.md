@@ -29,9 +29,15 @@ All notable changes to this project are documented in this file.
   - `PolicyDecisionRequest` / `PolicyDecisionResponse`
   - `PolicySignalCandidate` / `PolicyDecisionCandidate`
   - `PolicyDecisionAdapter` protocol + deterministic `DryRunPolicyDecisionAdapter`
+- Added `security_baseline` CLI (`python -m aetherya.security_baseline`) for deterministic, versioned stress regression checks against:
+  - jailbreak adversarial/benign baseline metrics
+  - audit tamper/integrity baseline metrics
+- Added versioned stress baseline snapshot at `tests/fixtures/security_baseline/v1/stress_baseline.json`.
+- Added `make security_baseline` single-command local/CI entrypoint for baseline validation.
 
 ### Changed
 - CI workflow now runs `security_gate` in a dedicated job and enforces tag release readiness (`v*`) via `release_readiness` depending on `test` + `security_gate`.
+- CI `test` job now executes versioned security baseline regression on every push/PR.
 
 ## v0.3.0 - 2026-02-28
 

@@ -42,6 +42,10 @@ jobs:
         run: |
           pytest tests/test_audit_verify.py tests/test_audit_integrity_stress.py tests/test_audit_tamper_campaign.py -q
 
+      - name: Security Baseline Regression (Versioned)
+        run: |
+          make security_baseline
+
       - name: Capability Regression Suite
         run: |
           pytest tests/test_capability_gate.py tests/test_pipeline_capability_gate.py -q
