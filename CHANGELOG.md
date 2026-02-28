@@ -34,6 +34,12 @@ All notable changes to this project are documented in this file.
   - audit tamper/integrity baseline metrics
 - Added versioned stress baseline snapshot at `tests/fixtures/security_baseline/v1/stress_baseline.json`.
 - Added `make security_baseline` single-command local/CI entrypoint for baseline validation.
+- Added pipeline integration for `policy_adapter_shadow` telemetry:
+  - runs `DryRunPolicyDecisionAdapter` in non-blocking mode
+  - emits projected-risk and adapter signal trace into audit context
+- Added chaos tests:
+  - concurrent byte mutation campaign against `audit/decisions.jsonl` while `AuditLogger` writes, with detection latency assertion (`<10ms`)
+  - corrupt signal-type injection test to assert immediate `fail_closed:risk_aggregate`
 
 ### Changed
 - CI workflow now runs `security_gate` in a dedicated job and enforces tag release readiness (`v*`) via `release_readiness` depending on `test` + `security_gate`.

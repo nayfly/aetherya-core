@@ -100,6 +100,7 @@ Future-proof adapter layer for external context engines (LLM, vector DB, etc.) w
 - `PolicySignalCandidate` and `PolicyDecisionCandidate` for external suggestions
 - `PolicyDecisionAdapter` protocol + `ensure_policy_decision_adapter` contract guard
 - `DryRunPolicyDecisionAdapter` deterministic reference implementation
+- `policy_adapter_shadow` pipeline telemetry mode (no decision override, only projected-risk trace)
 
 ## Quality Guarantees
 
@@ -134,6 +135,12 @@ Run versioned security baseline regression (single command used in local + CI):
 
 ```bash
 make security_baseline
+```
+
+Run focused chaos tests:
+
+```bash
+pytest tests/test_audit_chaos_bytes.py tests/test_pipeline_policy_adapter_shadow.py -q
 ```
 
 ## Render Explainability Graph

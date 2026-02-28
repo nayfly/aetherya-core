@@ -541,3 +541,73 @@ def test_llm_shadow_empty_model_raises(tmp_path):
 
     with pytest.raises(ValueError, match="llm_shadow.model"):
         load_policy_config(path)
+
+
+def test_policy_adapter_shadow_defaults_when_missing(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+    }
+
+    path = tmp_path / "policy_adapter_shadow_defaults.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    cfg = load_policy_config(path)
+
+    assert cfg.policy_adapter_shadow.enabled is False
+    assert cfg.policy_adapter_shadow.max_signals == 3
+
+
+def test_policy_adapter_shadow_parsing(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "policy_adapter_shadow": {
+            "enabled": True,
+            "max_signals": 5,
+        },
+    }
+
+    path = tmp_path / "policy_adapter_shadow_parsing.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    cfg = load_policy_config(path)
+
+    assert cfg.policy_adapter_shadow.enabled is True
+    assert cfg.policy_adapter_shadow.max_signals == 5
+
+
+def test_policy_adapter_shadow_invalid_max_signals_raises(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "policy_adapter_shadow": {
+            "enabled": True,
+            "max_signals": 0,
+        },
+    }
+
+    path = tmp_path / "policy_adapter_shadow_bad_max.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    with pytest.raises(ValueError, match="policy_adapter_shadow.max_signals"):
+        load_policy_config(path)

@@ -96,6 +96,12 @@ class LLMShadowConfig:
 
 
 @dataclass(frozen=True)
+class PolicyAdapterShadowConfig:
+    enabled: bool
+    max_signals: int
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     version: int
     modes: dict[str, ModeConfig]
@@ -105,6 +111,7 @@ class PolicyConfig:
     capability_matrix: CapabilityMatrixConfig
     confirmation: ConfirmationConfig
     llm_shadow: LLMShadowConfig
+    policy_adapter_shadow: PolicyAdapterShadowConfig
     policy_fingerprint: str | None = None
 
 
@@ -280,6 +287,19 @@ def _load_llm_shadow(raw: dict[str, Any] | None) -> LLMShadowConfig:
     )
 
 
+def _load_policy_adapter_shadow(raw: dict[str, Any] | None) -> PolicyAdapterShadowConfig:
+    data = raw or {}
+
+    max_signals = int(data.get("max_signals", 3))
+    if max_signals <= 0:
+        raise ValueError("policy_adapter_shadow.max_signals must be > 0")
+
+    return PolicyAdapterShadowConfig(
+        enabled=bool(data.get("enabled", False)),
+        max_signals=max_signals,
+    )
+
+
 def load_policy_config(path: str | Path) -> PolicyConfig:
     path = Path(path)
     raw_text = path.read_text(encoding="utf-8")
@@ -315,6 +335,7 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
     capability_matrix = _load_capability_matrix(data.get("capability_matrix"))
     confirmation = _load_confirmation(data.get("confirmation"))
     llm_shadow = _load_llm_shadow(data.get("llm_shadow"))
+    policy_adapter_shadow = _load_policy_adapter_shadow(data.get("policy_adapter_shadow"))
 
     return PolicyConfig(
         version=version,
@@ -325,5 +346,6 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
         capability_matrix=capability_matrix,
         confirmation=confirmation,
         llm_shadow=llm_shadow,
+        policy_adapter_shadow=policy_adapter_shadow,
         policy_fingerprint=_policy_fingerprint(raw_text),
     )

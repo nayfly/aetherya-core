@@ -88,3 +88,29 @@ def test_pipeline_fail_closed_on_aggregate_error(monkeypatch: pytest.MonkeyPatch
     d = run_pipeline("mode:operative hi", DummyConstitution(), actor="robert", cfg=cfg, audit=audit)
     assert d.allowed is False
     assert "fail_closed:risk_aggregate" in d.reason
+
+
+def test_pipeline_fail_closed_on_corrupt_signal_type_in_aggregator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    class DummyJailbreakGuard:
+        def evaluate(self, text: str):  # noqa: ANN001
+            return {
+                "risk_score": 95,
+                "confidence": 1.0,
+                "reason": "prompt injection attempt",
+                "tags": ["jailbreak_attempt"],
+            }
+
+    monkeypatch.setattr(pipeline, "JailbreakGuard", DummyJailbreakGuard)
+    monkeypatch.setattr(pipeline, "RiskSignal", lambda **kwargs: 1)  # noqa: ARG005
+
+    cfg = DummyCfg()
+    audit = DummyAudit()
+
+    d = run_pipeline("mode:operative hi", DummyConstitution(), actor="robert", cfg=cfg, audit=audit)
+    assert d.allowed is False
+    assert "fail_closed:risk_aggregate" in d.reason
+    assert d.violated_principle == "FailClosed"

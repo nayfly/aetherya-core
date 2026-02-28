@@ -12,6 +12,7 @@ from aetherya.config import (
     ConfirmationRequireConfig,
     ExecutionGateConfig,
     LLMShadowConfig,
+    PolicyAdapterShadowConfig,
     PolicyConfig,
 )
 from aetherya.confirmation_gate import ConfirmationGate, ConfirmationOutcome
@@ -22,6 +23,11 @@ from aetherya.jailbreak import JailbreakGuard
 from aetherya.llm_provider import DryRunLLMProvider, LLMMessage, LLMRequest
 from aetherya.modes import Mode
 from aetherya.parser import parse_user_input
+from aetherya.policy_decision_adapter import (
+    DryRunPolicyDecisionAdapter,
+    PolicyDecisionRequest,
+    ensure_policy_decision_adapter,
+)
 from aetherya.policy_engine import DecisionState, PolicyEngine
 from aetherya.procedural_guard import ProceduralGuard
 from aetherya.risk import RiskAggregator, RiskDecision, RiskSignal
@@ -122,6 +128,20 @@ def _llm_shadow_cfg(cfg: PolicyConfig | Any) -> LLMShadowConfig:
     if isinstance(llm_shadow_cfg, LLMShadowConfig):
         return llm_shadow_cfg
     return _default_llm_shadow_config()
+
+
+def _default_policy_adapter_shadow_config() -> PolicyAdapterShadowConfig:
+    return PolicyAdapterShadowConfig(
+        enabled=False,
+        max_signals=3,
+    )
+
+
+def _policy_adapter_shadow_cfg(cfg: PolicyConfig | Any) -> PolicyAdapterShadowConfig:
+    adapter_cfg = getattr(cfg, "policy_adapter_shadow", None)
+    if isinstance(adapter_cfg, PolicyAdapterShadowConfig):
+        return adapter_cfg
+    return _default_policy_adapter_shadow_config()
 
 
 def _aggregator_weights(cfg: PolicyConfig | Any) -> dict[str, Any]:
@@ -577,6 +597,93 @@ def run_pipeline(
             "error": str(exc),
         }
 
+    policy_adapter_shadow: dict[str, Any] | None = None
+    try:
+        adapter_cfg = _policy_adapter_shadow_cfg(cfg)
+        if adapter_cfg.enabled:
+            adapter = ensure_policy_decision_adapter(
+                DryRunPolicyDecisionAdapter(seed="aetherya-policy-adapter-shadow:v1")
+            )
+            trace_id_raw = (
+                action.parameters.get("trace_id") if isinstance(action.parameters, dict) else None
+            )
+            trace_id = (
+                trace_id_raw.strip()
+                if isinstance(trace_id_raw, str) and trace_id_raw.strip()
+                else f"{mode.value}:{actor}"
+            )
+            adapter_request = PolicyDecisionRequest(
+                actor=actor,
+                mode=mode.value,
+                raw_input=raw_input,
+                trace_id=trace_id,
+                action={
+                    "intent": action.intent,
+                    "mode_hint": action.mode_hint,
+                    "tool": action.tool,
+                    "target": action.target,
+                    "parameters": dict(action.parameters),
+                },
+                baseline={
+                    "total_risk": int(agg.total_score),
+                    "aggregate_decision": agg.decision.value,
+                    "effective_risk_decision": decision_for_engine.value,
+                    "state": final.state,
+                    "allowed": final.allowed,
+                },
+                metadata={
+                    "policy_fingerprint": policy_fingerprint,
+                },
+            )
+            adapter_response = adapter.suggest(adapter_request)
+            adapter_response.validate()
+
+            projected_signals: list[dict[str, Any]] = []
+            projected_additional_risk = 0
+            for signal in adapter_response.signals[: adapter_cfg.max_signals]:
+                signal.validate()
+                weighted_score = max(
+                    0, _safe_int(round(signal.score * float(signal.confidence)), 0)
+                )
+                projected_additional_risk += weighted_score
+                projected_signals.append(
+                    {
+                        "source": signal.source,
+                        "score": signal.score,
+                        "confidence": signal.confidence,
+                        "reason": signal.reason,
+                        "tags": list(signal.tags),
+                        "violated_principle": signal.violated_principle,
+                        "weighted_score": weighted_score,
+                    }
+                )
+
+            policy_adapter_shadow = {
+                "enabled": True,
+                "adapter": adapter_response.adapter,
+                "request_id": adapter_response.request_id,
+                "dry_run": adapter_response.dry_run,
+                "max_signals": adapter_cfg.max_signals,
+                "signals": projected_signals,
+                "projected_additional_risk": projected_additional_risk,
+                "projected_total_risk": _safe_int(agg.total_score, 0) + projected_additional_risk,
+                "request_hash": str(adapter_response.metadata.get("request_hash", "")),
+                "decision_candidates": [
+                    {
+                        "state": candidate.state,
+                        "confidence": candidate.confidence,
+                        "reason": candidate.reason,
+                    }
+                    for candidate in adapter_response.decision_candidates
+                ],
+            }
+    except Exception as exc:
+        policy_adapter_shadow = {
+            "enabled": True,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
     if audit:
         try:
             context: dict[str, Any] = {
@@ -587,6 +694,8 @@ def run_pipeline(
                 context["explainability"] = explainability
             if llm_shadow:
                 context["llm_shadow"] = llm_shadow
+            if policy_adapter_shadow:
+                context["policy_adapter_shadow"] = policy_adapter_shadow
             if policy_fingerprint:
                 context["policy_fingerprint"] = policy_fingerprint
             audit.log(

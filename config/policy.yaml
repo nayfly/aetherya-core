@@ -108,3 +108,7 @@ llm_shadow:
   model: gpt-dry
   temperature: 0.0
   max_tokens: 96
+
+policy_adapter_shadow:
+  enabled: false
+  max_signals: 3
