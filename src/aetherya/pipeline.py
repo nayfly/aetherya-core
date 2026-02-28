@@ -11,12 +11,15 @@ from aetherya.config import (
     ConfirmationEvidenceConfig,
     ConfirmationRequireConfig,
     ExecutionGateConfig,
+    LLMShadowConfig,
     PolicyConfig,
 )
-from aetherya.confirmation_gate import ConfirmationGate
+from aetherya.confirmation_gate import ConfirmationGate, ConfirmationOutcome
 from aetherya.constitution import Constitution
 from aetherya.execution_gate import ExecutionGate
+from aetherya.explainability import ExplainabilityEngine
 from aetherya.jailbreak import JailbreakGuard
+from aetherya.llm_provider import DryRunLLMProvider, LLMMessage, LLMRequest
 from aetherya.modes import Mode
 from aetherya.parser import parse_user_input
 from aetherya.policy_engine import DecisionState, PolicyEngine
@@ -97,6 +100,67 @@ def _confirmation_cfg(cfg: PolicyConfig | Any) -> ConfirmationConfig:
     return _default_confirmation_config()
 
 
+def _policy_fingerprint(cfg: PolicyConfig | Any) -> str | None:
+    raw = getattr(cfg, "policy_fingerprint", None)
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip()
+    return cleaned if cleaned else None
+
+
+def _default_llm_shadow_config() -> LLMShadowConfig:
+    return LLMShadowConfig(
+        enabled=False,
+        model="gpt-dry",
+        temperature=0.0,
+        max_tokens=128,
+    )
+
+
+def _llm_shadow_cfg(cfg: PolicyConfig | Any) -> LLMShadowConfig:
+    llm_shadow_cfg = getattr(cfg, "llm_shadow", None)
+    if isinstance(llm_shadow_cfg, LLMShadowConfig):
+        return llm_shadow_cfg
+    return _default_llm_shadow_config()
+
+
+def _aggregator_weights(cfg: PolicyConfig | Any) -> dict[str, Any]:
+    agg = getattr(cfg, "aggregator", None)
+    weights = getattr(agg, "weights", {})
+    if isinstance(weights, dict):
+        return dict(weights)
+    return {}
+
+
+def _mode_thresholds(cfg: PolicyConfig | Any, mode: str) -> dict[str, int]:
+    modes = getattr(cfg, "modes", None)
+    if modes is None:
+        return {}
+    try:
+        mode_cfg = modes[mode]
+    except Exception:
+        return {}
+
+    thresholds = getattr(mode_cfg, "thresholds", None)
+    if thresholds is None:
+        return {}
+
+    if isinstance(thresholds, dict):
+        deny_at = _safe_int(thresholds.get("deny_at", 0), 0)
+        confirm_at = _safe_int(thresholds.get("confirm_at", 0), 0)
+        log_only_at = _safe_int(thresholds.get("log_only_at", 0), 0)
+    else:
+        deny_at = _safe_int(getattr(thresholds, "deny_at", 0), 0)
+        confirm_at = _safe_int(getattr(thresholds, "confirm_at", 0), 0)
+        log_only_at = _safe_int(getattr(thresholds, "log_only_at", 0), 0)
+
+    return {
+        "deny_at": deny_at,
+        "confirm_at": confirm_at,
+        "log_only_at": log_only_at,
+    }
+
+
 def _fail_closed(
     *,
     raw_input: str,
@@ -105,6 +169,7 @@ def _fail_closed(
     stage: str,
     exc: Exception,
     audit: AuditLogger | None,
+    policy_fingerprint: str | None = None,
 ) -> Decision:
     final = Decision(
         allowed=False,
@@ -117,17 +182,20 @@ def _fail_closed(
 
     if audit:
         try:
+            context: dict[str, Any] = {
+                "mode": mode.value,
+                "stage": stage,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "signals": [],
+            }
+            if policy_fingerprint:
+                context["policy_fingerprint"] = policy_fingerprint
             audit.log(
                 actor=actor,
                 action=raw_input,
                 decision=final.to_dict(),
-                context={
-                    "mode": mode.value,
-                    "stage": stage,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "signals": [],
-                },
+                context=context,
             )
         except Exception:
             pass
@@ -145,6 +213,23 @@ def run_pipeline(
     # SAFE DEFAULT
     mode: Mode = Mode.CONSULTIVE
     safe_actor = actor if isinstance(actor, str) and actor.strip() else "unknown"
+    policy_fingerprint = _policy_fingerprint(cfg)
+
+    if policy_fingerprint:
+        audit_targets: list[Any] = []
+        if audit:
+            audit_targets.append(audit)
+        constitution_audit = getattr(constitution, "audit", None)
+        if constitution_audit and constitution_audit is not audit:
+            audit_targets.append(constitution_audit)
+
+        for target in audit_targets:
+            set_fingerprint = getattr(target, "set_policy_fingerprint", None)
+            if callable(set_fingerprint):
+                try:
+                    set_fingerprint(policy_fingerprint)
+                except Exception:
+                    pass
 
     # 0) ABI input contract (actor)
     try:
@@ -157,6 +242,7 @@ def run_pipeline(
             stage="actor",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 1) Parse + action request contract + modo (fail-closed si peta)
@@ -170,6 +256,7 @@ def run_pipeline(
             stage="parse_user_input",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     try:
@@ -182,6 +269,7 @@ def run_pipeline(
             stage="action_request",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     try:
@@ -194,6 +282,7 @@ def run_pipeline(
             stage="mode",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     signals: list[RiskSignal] = []
@@ -220,6 +309,7 @@ def run_pipeline(
             stage="execution_gate",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 3) Capability Gate (fail-closed si peta)
@@ -246,6 +336,7 @@ def run_pipeline(
             stage="capability_gate",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 4) Jailbreak Guard (fail-closed si peta)
@@ -270,6 +361,7 @@ def run_pipeline(
             stage="jailbreak_guard",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 5) Procedural Guard (fail-closed si peta)
@@ -295,11 +387,15 @@ def run_pipeline(
             stage="procedural_guard",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 6) Constitución (fail-closed si peta)
     try:
-        c = constitution.evaluate(action, actor=actor, context={"mode": mode.value})
+        constitution_context: dict[str, Any] = {"mode": mode.value}
+        if policy_fingerprint:
+            constitution_context["policy_fingerprint"] = policy_fingerprint
+        c = constitution.evaluate(action, actor=actor, context=constitution_context)
         signals.append(
             RiskSignal(
                 source="constitution",
@@ -318,6 +414,7 @@ def run_pipeline(
             stage="constitution",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 7) Agregación final (fail-closed si peta)
@@ -333,12 +430,14 @@ def run_pipeline(
             stage="risk_aggregate",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 8) Confirmación fuerte (fail-closed si peta)
     decision_for_engine = agg.decision
     reason_override: str | None = None
     principle_override: str | None = None
+    confirmation: ConfirmationOutcome | None = None
 
     try:
         confirmation = ConfirmationGate(_confirmation_cfg(cfg)).evaluate(
@@ -368,6 +467,7 @@ def run_pipeline(
             stage="confirmation_gate",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
 
     # 9) Mapear a DecisionState (esto ya es determinista)
@@ -408,18 +508,92 @@ def run_pipeline(
             stage="decision_contract",
             exc=exc,
             audit=audit,
+            policy_fingerprint=policy_fingerprint,
         )
+
+    explainability: dict[str, Any] | None = None
+    try:
+        explainability = ExplainabilityEngine().build(
+            signals=agg.breakdown,
+            aggregate=agg,
+            mode=mode.value,
+            weights=_aggregator_weights(cfg),
+            thresholds=_mode_thresholds(cfg, mode.value),
+            aggregate_decision=agg.decision.value,
+            effective_risk_decision=decision_for_engine.value,
+            state=state.value,
+            allowed=final.allowed,
+            reason=final.reason,
+            violated_principle=final.violated_principle,
+            confirmation=confirmation,
+        )
+    except Exception:
+        explainability = None
+
+    llm_shadow: dict[str, Any] | None = None
+    try:
+        shadow_cfg = _llm_shadow_cfg(cfg)
+        if shadow_cfg.enabled:
+            provider = DryRunLLMProvider(seed="aetherya-shadow:v1")
+            request = LLMRequest(
+                model=shadow_cfg.model,
+                messages=[
+                    LLMMessage(
+                        role="system",
+                        content=(
+                            "Shadow mode only. Analyze decision context and provide dry-run trace."
+                        ),
+                    ),
+                    LLMMessage(role="user", content=raw_input),
+                ],
+                temperature=shadow_cfg.temperature,
+                max_tokens=shadow_cfg.max_tokens,
+                metadata={
+                    "mode": mode.value,
+                    "state": final.state,
+                    "decision_reason": final.reason,
+                    "policy_fingerprint": policy_fingerprint,
+                },
+            )
+            response = provider.generate(request)
+            llm_shadow = {
+                "enabled": True,
+                "provider": response.provider,
+                "model": response.model,
+                "response_id": response.response_id,
+                "finish_reason": response.finish_reason,
+                "dry_run": response.dry_run,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                },
+                "request_hash": str(response.metadata.get("request_hash", "")),
+            }
+    except Exception as exc:
+        llm_shadow = {
+            "enabled": True,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
 
     if audit:
         try:
+            context: dict[str, Any] = {
+                "mode": mode.value,
+                "signals": [s.__dict__ for s in agg.breakdown],
+            }
+            if explainability:
+                context["explainability"] = explainability
+            if llm_shadow:
+                context["llm_shadow"] = llm_shadow
+            if policy_fingerprint:
+                context["policy_fingerprint"] = policy_fingerprint
             audit.log(
                 actor=actor,
                 action=raw_input,
                 decision=final.to_dict(),
-                context={
-                    "mode": mode.value,
-                    "signals": [s.__dict__ for s in agg.breakdown],
-                },
+                context=context,
             )
         except Exception:
             pass

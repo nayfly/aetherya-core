@@ -27,6 +27,7 @@ class DummyCfg:
     procedural_guard = _PG()
     aggregator = _Agg()
     modes = _Modes()
+    policy_fingerprint = "sha256:test-policy"
 
 
 class DummyConstitution:
@@ -45,6 +46,11 @@ class AuditOK:
 class AuditBoom:
     def log(self, **_kwargs):  # noqa: ANN003
         raise RuntimeError("audit died")
+
+
+class AuditSetterBoom(AuditOK):
+    def set_policy_fingerprint(self, _value: str) -> None:
+        raise RuntimeError("setter died")
 
 
 def test_pipeline_audit_log_is_called_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,6 +78,9 @@ def test_pipeline_audit_log_is_called_on_success(monkeypatch: pytest.MonkeyPatch
     )
     assert d.allowed is True
     assert len(audit.events) == 1  # cubre 185-194
+    assert "explainability" in audit.events[0]["context"]
+    assert audit.events[0]["context"]["explainability"]["summary"]["state"] == "allow"
+    assert audit.events[0]["context"]["policy_fingerprint"] == "sha256:test-policy"
 
 
 def test_pipeline_audit_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,3 +107,32 @@ def test_pipeline_audit_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert d.allowed is True
     assert "fail_closed:audit" not in d.reason  # cubre 195-196
+
+
+def test_pipeline_policy_fingerprint_setter_failure_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    class AggResult:
+        decision = RiskDecision.ALLOW
+        total_score = 0
+        reasons = ["ok"]
+        top_signal = None
+        breakdown = []
+
+    class Agg:
+        def __init__(self, *_a, **_k):  # noqa: ANN001
+            pass
+
+        def aggregate(self, _signals, mode: str):  # noqa: ANN001
+            return AggResult()
+
+    monkeypatch.setattr(pipeline, "RiskAggregator", Agg)
+
+    audit = AuditSetterBoom()
+    d = run_pipeline(
+        "mode:operative hi", DummyConstitution(), actor="robert", cfg=DummyCfg(), audit=audit
+    )
+    assert d.allowed is True
+    assert len(audit.events) == 1

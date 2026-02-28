@@ -36,7 +36,11 @@ jobs:
 
       - name: Jailbreak Regression Suite
         run: |
-          pytest tests/test_jailbreak_guard.py -q
+          pytest tests/test_jailbreak_guard.py tests/test_jailbreak_guard_stress.py tests/test_security_corpus_regression.py -q
+
+      - name: Audit Integrity Stress Suite
+        run: |
+          pytest tests/test_audit_verify.py tests/test_audit_integrity_stress.py tests/test_audit_tamper_campaign.py -q
 
       - name: Capability Regression Suite
         run: |
@@ -49,3 +53,25 @@ jobs:
       - name: Tests + Coverage
         run: |
           pytest --cov
+
+      - name: Audit Attestation Self-Check (Strict HMAC)
+        run: |
+          export AETHERYA_ATTESTATION_KEY="ci-attestation-key"
+          mkdir -p audit
+          python - <<'PY'
+          from aetherya.audit import AuditLogger
+
+          logger = AuditLogger("audit/ci_decisions.jsonl")
+          logger.log(
+              actor="ci",
+              action="self-check",
+              decision={"allowed": True, "risk_score": 0, "state": "allow"},
+              context={"mode": "consultive", "stage": "ci"},
+          )
+          PY
+          python -m aetherya.audit_verify --audit-path audit/ci_decisions.jsonl --require-hmac
+
+      - name: Security Gate (3 Phases)
+        run: |
+          export AETHERYA_ATTESTATION_KEY="ci-attestation-key"
+          python -m aetherya.security_gate --phase2-events 1000 --phase2-seed 1337 --phase2-mutation-rounds 32

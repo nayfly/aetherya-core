@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,14 @@ class ConfirmationConfig:
 
 
 @dataclass(frozen=True)
+class LLMShadowConfig:
+    enabled: bool
+    model: str
+    temperature: float
+    max_tokens: int
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     version: int
     modes: dict[str, ModeConfig]
@@ -95,12 +104,18 @@ class PolicyConfig:
     execution_gate: ExecutionGateConfig
     capability_matrix: CapabilityMatrixConfig
     confirmation: ConfirmationConfig
+    llm_shadow: LLMShadowConfig
+    policy_fingerprint: str | None = None
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
     if key not in d:
         raise ValueError(f"Missing required key: {key}")
     return d[key]
+
+
+def _policy_fingerprint(raw_text: str) -> str:
+    return f"sha256:{hashlib.sha256(raw_text.encode('utf-8')).hexdigest()}"
 
 
 def _load_execution_gate(raw: dict[str, Any] | None) -> ExecutionGateConfig:
@@ -242,9 +257,33 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
     )
 
 
+def _load_llm_shadow(raw: dict[str, Any] | None) -> LLMShadowConfig:
+    data = raw or {}
+
+    model = str(data.get("model", "gpt-dry")).strip()
+    if not model:
+        raise ValueError("llm_shadow.model must be non-empty")
+
+    temperature = float(data.get("temperature", 0.0))
+    if temperature < 0.0 or temperature > 2.0:
+        raise ValueError("llm_shadow.temperature must be between 0.0 and 2.0")
+
+    max_tokens = int(data.get("max_tokens", 128))
+    if max_tokens <= 0:
+        raise ValueError("llm_shadow.max_tokens must be > 0")
+
+    return LLMShadowConfig(
+        enabled=bool(data.get("enabled", False)),
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+
 def load_policy_config(path: str | Path) -> PolicyConfig:
     path = Path(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw_text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw_text)
 
     version = int(_require(data, "version"))
 
@@ -275,6 +314,7 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
     execution_gate = _load_execution_gate(data.get("execution_gate"))
     capability_matrix = _load_capability_matrix(data.get("capability_matrix"))
     confirmation = _load_confirmation(data.get("confirmation"))
+    llm_shadow = _load_llm_shadow(data.get("llm_shadow"))
 
     return PolicyConfig(
         version=version,
@@ -284,4 +324,6 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
         execution_gate=execution_gate,
         capability_matrix=capability_matrix,
         confirmation=confirmation,
+        llm_shadow=llm_shadow,
+        policy_fingerprint=_policy_fingerprint(raw_text),
     )

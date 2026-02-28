@@ -102,3 +102,9 @@ confirmation:
     context_param: confirm_context
     token_pattern: "^ack:[a-z0-9_-]{8,}$"
     min_context_length: 12
+
+llm_shadow:
+  enabled: false
+  model: gpt-dry
+  temperature: 0.0
+  max_tokens: 96

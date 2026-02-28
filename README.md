@@ -78,6 +78,21 @@ Snapshot-friendly output:
 - `violated_principle`
 - `mode`
 
+### Explainability Engine
+
+Builds a deterministic justification graph per decision:
+- per-signal weighted contribution
+- graph nodes/edges from signals to aggregate and final state
+- explicit transition from aggregate decision to final policy state
+
+### LLM Provider (Dry Run)
+
+Deterministic provider contract before real LLM integration:
+- `LLMRequest` / `LLMResponse` typed contracts
+- `LLMProvider` protocol
+- `DryRunLLMProvider` for safe local simulations (no external calls)
+- `llm_shadow` mode in pipeline for non-executing telemetry
+
 ## Quality Guarantees
 
 - Typed pipeline (mypy clean)
@@ -86,7 +101,7 @@ Snapshot-friendly output:
 - Coverage enforced (>=99%)
 - CI validated on every push
 - Audit traceability with deterministic `decision_id` + `context_hash`
-- Versioned baseline (`v0.1.0`)
+- Versioned baseline (`v0.3.0`)
 
 ## Installation
 
@@ -100,9 +115,76 @@ pip install -e ".[dev]"
 pytest --cov
 ```
 
+Run dedicated stress suites:
+
+```bash
+pytest tests/test_audit_integrity_stress.py tests/test_audit_tamper_campaign.py tests/test_jailbreak_guard_stress.py tests/test_security_corpus_regression.py -q
+```
+
+## Render Explainability Graph
+
+Generate Mermaid from the latest audit event:
+
+```bash
+python -m aetherya.explainability_render --audit-path audit/decisions.jsonl --event-index -1 --output audit/explainability_latest.mmd
+```
+
+If `--output` is omitted, Mermaid is printed to stdout.
+
+Generate a static HTML report (summary + Mermaid graph):
+
+```bash
+python -m aetherya.explainability_report --audit-path audit/decisions.jsonl --event-index -1 --output audit/explainability_report.html --title "AETHERYA Audit Report"
+```
+
+## Verify Audit Attestation
+
+Validate integrity (`context_hash`, `decision_id`) and cryptographic attestation:
+
+```bash
+python -m aetherya.audit_verify --audit-path audit/decisions.jsonl
+```
+
+Validate one event and emit JSON:
+
+```bash
+python -m aetherya.audit_verify --audit-path audit/decisions.jsonl --event-index -1 --json
+```
+
+Strict mode (rejects non-HMAC events):
+
+```bash
+AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.audit_verify --audit-path audit/decisions.jsonl --require-hmac
+```
+
+Strict chain-causality verification (detects reordered/sabotaged JSONL history):
+
+```bash
+AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.audit_verify --audit-path audit/decisions.jsonl --require-hmac --require-chain
+```
+
+## Security Gate
+
+Run the 3-phase release gate:
+- corpus regression against expected snapshots
+- deterministic integrity fuzz campaign (1,000 events)
+- signed release manifest
+
+```bash
+AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.security_gate --phase2-events 1000 --phase2-seed 1337 --phase2-mutation-rounds 32
+```
+
+Optional HTML reports for corpus failures:
+
+```bash
+AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.security_gate --failure-report-dir audit/security_gate/fail_reports
+```
+
 ## Status
 
 `v0.3.0` – Stable baseline with deterministic policy pipeline.
+
+See [CHANGELOG.md](./CHANGELOG.md) for release details.
 
 ## Design Principles
 

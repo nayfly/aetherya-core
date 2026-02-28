@@ -1,3 +1,5 @@
+import json
+
 from aetherya.audit import AuditLogger
 from aetherya.config import load_policy_config
 from aetherya.constitution import Constitution, Principle
@@ -60,3 +62,22 @@ def test_privileged_pkg_removal_is_not_auto_allowed(tmp_path):
     )
     assert decision.allowed is False  # no ejecución automática
     assert decision.violated_principle == "ProceduralSafety"
+
+
+def test_policy_fingerprint_is_attached_to_audit_events(tmp_path):
+    cfg = load_policy_config("config/policy.yaml")
+    audit_path = tmp_path / "decisions.jsonl"
+    audit = AuditLogger(audit_path)
+    core = make_core(audit)
+
+    run_pipeline("help user", constitution=core, actor="robert", cfg=cfg)
+
+    events = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert events
+    for event in events:
+        assert event["policy_fingerprint"] == cfg.policy_fingerprint
+        assert event["context"]["policy_fingerprint"] == cfg.policy_fingerprint

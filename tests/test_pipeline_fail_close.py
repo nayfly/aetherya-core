@@ -29,6 +29,7 @@ class DummyCfg:
         self.procedural_guard = {}  # ProceduralGuard(cfg.procedural_guard)
         self.aggregator = {}  # RiskAggregator(cfg=cfg.aggregator, ...)
         self.modes = {}  # RiskAggregator(..., modes=cfg.modes)
+        self.policy_fingerprint = "sha256:test-policy"
 
 
 def test_pipeline_fail_closed_on_parse_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -388,3 +388,156 @@ def test_confirmation_same_evidence_keys_raise(tmp_path):
 
     with pytest.raises(ValueError):
         load_policy_config(path)
+
+
+def test_policy_fingerprint_is_present_and_stable(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+    }
+
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    cfg1 = load_policy_config(path)
+    cfg2 = load_policy_config(path)
+
+    assert isinstance(cfg1.policy_fingerprint, str)
+    assert cfg1.policy_fingerprint.startswith("sha256:")
+    assert cfg1.policy_fingerprint == cfg2.policy_fingerprint
+
+
+def test_llm_shadow_defaults_when_missing(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+    }
+
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    cfg = load_policy_config(path)
+
+    assert cfg.llm_shadow.enabled is False
+    assert cfg.llm_shadow.model == "gpt-dry"
+    assert cfg.llm_shadow.temperature == 0.0
+    assert cfg.llm_shadow.max_tokens == 128
+
+
+def test_llm_shadow_parsing(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "model": "gpt-shadow",
+            "temperature": 0.4,
+            "max_tokens": 64,
+        },
+    }
+
+    path = tmp_path / "policy_shadow.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    cfg = load_policy_config(path)
+
+    assert cfg.llm_shadow.enabled is True
+    assert cfg.llm_shadow.model == "gpt-shadow"
+    assert cfg.llm_shadow.temperature == 0.4
+    assert cfg.llm_shadow.max_tokens == 64
+
+
+def test_llm_shadow_invalid_temperature_raises(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "model": "gpt-shadow",
+            "temperature": 3.0,
+            "max_tokens": 64,
+        },
+    }
+
+    path = tmp_path / "policy_shadow_bad_temp.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    with pytest.raises(ValueError, match="llm_shadow.temperature"):
+        load_policy_config(path)
+
+
+def test_llm_shadow_invalid_max_tokens_raises(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "model": "gpt-shadow",
+            "temperature": 0.2,
+            "max_tokens": 0,
+        },
+    }
+
+    path = tmp_path / "policy_shadow_bad_tokens.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    with pytest.raises(ValueError, match="llm_shadow.max_tokens"):
+        load_policy_config(path)
+
+
+def test_llm_shadow_empty_model_raises(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "model": "",
+            "temperature": 0.2,
+            "max_tokens": 64,
+        },
+    }
+
+    path = tmp_path / "policy_shadow_bad_model.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    with pytest.raises(ValueError, match="llm_shadow.model"):
+        load_policy_config(path)
