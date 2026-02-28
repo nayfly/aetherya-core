@@ -40,10 +40,13 @@ All notable changes to this project are documented in this file.
 - Added chaos tests:
   - concurrent byte mutation campaign against `audit/decisions.jsonl` while `AuditLogger` writes, with detection latency assertion (`<10ms`)
   - corrupt signal-type injection test to assert immediate `fail_closed:risk_aggregate`
+- Added `chaos_benchmark` CLI (`python -m aetherya.chaos_benchmark`) to run repeated deterministic chaos campaigns and emit latency metrics + SLO verdict (`p95`/`p99`).
+- Added `make chaos_benchmark` local command to generate `audit/chaos/chaos_benchmark_metrics.json`.
 
 ### Changed
 - CI workflow now runs `security_gate` in a dedicated job and enforces tag release readiness (`v*`) via `release_readiness` depending on `test` + `security_gate`.
 - CI `test` job now executes versioned security baseline regression on every push/PR.
+- CI now runs `chaos_tests` as a separate job with artifact upload and latency thresholds (`p95<=12ms`, `p99<=20ms`, detection rate `1.0`).
 
 ## v0.3.0 - 2026-02-28
 

@@ -143,6 +143,12 @@ Run focused chaos tests:
 pytest tests/test_audit_chaos_bytes.py tests/test_pipeline_policy_adapter_shadow.py -q
 ```
 
+Run chaos benchmark with latency SLO thresholds:
+
+```bash
+make chaos_benchmark
+```
+
 ## Render Explainability Graph
 
 Generate Mermaid from the latest audit event:
@@ -203,6 +209,13 @@ AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.security_gate --failure-r
 ```
 
 In CI, `security_gate` runs as an explicit job and tag releases (`v*`) are blocked unless both `test` and `security_gate` pass.
+
+`chaos_tests` runs in a separate CI job and enforces latency SLOs over deterministic chaos runs:
+- `p95 <= 12ms`
+- `p99 <= 20ms`
+- detection rate required = `1.0`
+
+Each run uploads `audit/chaos/chaos_benchmark_metrics.json` as build artifact.
 
 ## Versioned Security Baseline
 
