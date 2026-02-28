@@ -4,37 +4,36 @@ from enum import StrEnum
 from typing import Any
 
 from aetherya.modes import Mode
+from aetherya.risk import RiskDecision
 
 
 class DecisionState(StrEnum):
     ALLOW = "allow"
     DENY = "deny"
-    ESCALATE = "escalate"  # pedir confirmación humana
-    LOG_ONLY = "log_only"  # consultivo, no ejecuta
+    ESCALATE = "escalate"
+    LOG_ONLY = "log_only"
 
 
 class PolicyEngine:
-    def _parse_risk(self, constitution_result: dict[str, Any]) -> int | None:
-        raw = constitution_result.get("risk_score", 0)
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
+    def evaluate(self, decision: Any, mode: Mode) -> DecisionState:
+        if not isinstance(mode, Mode):
+            return DecisionState.ESCALATE
 
-    def evaluate(self, constitution_result: dict[str, Any], mode: Mode) -> DecisionState:
-        if not constitution_result.get("allowed", False):
+        if not isinstance(decision, RiskDecision):
+            return DecisionState.ESCALATE  # ← test exige esto
+
+        # Primero respetamos el riesgo
+        if decision == RiskDecision.DENY:
             return DecisionState.DENY
 
+        if decision == RiskDecision.REQUIRE_CONFIRM:
+            return DecisionState.ESCALATE
+
+        if decision == RiskDecision.LOG_ONLY:
+            return DecisionState.LOG_ONLY
+
+        # Solo aquí afecta el modo
         if mode == Mode.CONSULTIVE:
             return DecisionState.LOG_ONLY
 
-        risk = self._parse_risk(constitution_result)
-        if risk is None:
-            return DecisionState.ESCALATE  # fail-closed
-
-        if mode == Mode.OPERATIVE:
-            if risk <= 20:
-                return DecisionState.ALLOW
-            return DecisionState.ESCALATE
-
-        return DecisionState.ESCALATE
+        return DecisionState.ALLOW

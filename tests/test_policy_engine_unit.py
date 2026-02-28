@@ -1,47 +1,49 @@
-from typing import cast
+from typing import Any, cast
 
 from aetherya.modes import Mode
 from aetherya.policy_engine import DecisionState, PolicyEngine
+from aetherya.risk import RiskDecision
 
 
-def test_policy_engine_denies_when_not_allowed() -> None:
+def test_policy_engine_consultive_keeps_deny_as_deny() -> None:
     engine = PolicyEngine()
-    state = engine.evaluate({"allowed": False, "risk_score": 0}, mode=Mode.OPERATIVE)
+    state = engine.evaluate(decision=RiskDecision.DENY, mode=Mode.CONSULTIVE)
     assert state == DecisionState.DENY
 
 
-def test_policy_engine_operational_missing_risk_defaults_to_zero_allows() -> None:
+def test_policy_engine_maps_deny_to_deny() -> None:
     engine = PolicyEngine()
-    state = engine.evaluate({"allowed": True}, mode=Mode.OPERATIVE)
-    assert state == DecisionState.ALLOW
+    state = engine.evaluate(decision=RiskDecision.DENY, mode=Mode.OPERATIVE)
+    assert state == DecisionState.DENY
 
 
-def test_policy_engine_risk_string_is_castable() -> None:
+def test_policy_engine_maps_require_confirm_to_escalate() -> None:
     engine = PolicyEngine()
-    state = engine.evaluate({"allowed": True, "risk_score": "20"}, mode=Mode.OPERATIVE)
-    assert state == DecisionState.ALLOW
-
-
-def test_policy_engine_operational_escalates_when_risk_above_threshold() -> None:
-    engine = PolicyEngine()
-    state = engine.evaluate({"allowed": True, "risk_score": 21}, mode=Mode.OPERATIVE)
+    state = engine.evaluate(decision=RiskDecision.REQUIRE_CONFIRM, mode=Mode.OPERATIVE)
     assert state == DecisionState.ESCALATE
 
 
-def test_policy_engine_consultive_is_always_log_only_when_allowed() -> None:
+def test_policy_engine_maps_log_only_to_log_only() -> None:
     engine = PolicyEngine()
-    state = engine.evaluate({"allowed": True, "risk_score": 999}, mode=Mode.CONSULTIVE)
+    state = engine.evaluate(decision=RiskDecision.LOG_ONLY, mode=Mode.OPERATIVE)
     assert state == DecisionState.LOG_ONLY
 
 
-def test_policy_engine_unknown_mode_falls_back_to_safe_default() -> None:
+def test_policy_engine_maps_allow_to_allow() -> None:
     engine = PolicyEngine()
-    weird_mode = cast(Mode, "UNKNOWN_MODE")
-    state = engine.evaluate({"allowed": True, "risk_score": 0}, mode=weird_mode)
+    state = engine.evaluate(decision=RiskDecision.ALLOW, mode=Mode.OPERATIVE)
+    assert state == DecisionState.ALLOW
+
+
+def test_policy_engine_unknown_decision_fails_closed_to_escalate() -> None:
+    engine = PolicyEngine()
+    weird: Any = "SOMETHING_NEW"
+    state = engine.evaluate(decision=weird, mode=Mode.OPERATIVE)
     assert state == DecisionState.ESCALATE
 
 
-def test_policy_engine_risk_invalid_string_fails_closed() -> None:
+def test_policy_engine_unknown_mode_fails_closed_to_escalate() -> None:
     engine = PolicyEngine()
-    state = engine.evaluate({"allowed": True, "risk_score": "nope"}, mode=Mode.OPERATIVE)
+    weird_mode = cast(Mode, "UNKNOWN_MODE")
+    state = engine.evaluate(decision=RiskDecision.ALLOW, mode=weird_mode)
     assert state == DecisionState.ESCALATE

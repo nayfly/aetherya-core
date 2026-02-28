@@ -1,6 +1,7 @@
 import pytest
 
 from aetherya.pipeline import run_pipeline
+from aetherya.risk import RiskDecision
 
 
 class DummyCfg:
@@ -50,7 +51,7 @@ def test_pipeline_audit_log_is_called_on_success(monkeypatch: pytest.MonkeyPatch
     import aetherya.pipeline as pipeline
 
     class AggResult:
-        decision = pipeline.RiskDecision.ALLOW
+        decision = RiskDecision.ALLOW
         total_score = 0
         reasons = ["ok"]
         top_signal = None
@@ -77,7 +78,7 @@ def test_pipeline_audit_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) ->
     import aetherya.pipeline as pipeline
 
     class AggResult:
-        decision = pipeline.RiskDecision.ALLOW
+        decision = RiskDecision.ALLOW
         total_score = 0
         reasons = ["ok"]
         top_signal = None

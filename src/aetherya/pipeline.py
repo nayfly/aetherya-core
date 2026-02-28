@@ -8,9 +8,9 @@ from aetherya.config import PolicyConfig
 from aetherya.constitution import Constitution
 from aetherya.modes import Mode
 from aetherya.parser import parse_user_input
-from aetherya.policy_engine import DecisionState
+from aetherya.policy_engine import DecisionState, PolicyEngine
 from aetherya.procedural_guard import ProceduralGuard
-from aetherya.risk import RiskAggregator, RiskDecision, RiskSignal
+from aetherya.risk import RiskAggregator, RiskSignal
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -164,17 +164,14 @@ def run_pipeline(
         )
 
     # 5) Mapear a DecisionState (esto ya es determinista)
-    if agg.decision == RiskDecision.DENY:
-        state = DecisionState.DENY
-    elif agg.decision == RiskDecision.REQUIRE_CONFIRM:
-        state = DecisionState.ESCALATE
-    elif agg.decision == RiskDecision.LOG_ONLY:
-        state = DecisionState.LOG_ONLY
-    else:
-        state = DecisionState.ALLOW
+    engine = PolicyEngine()
+    state = engine.evaluate(decision=agg.decision, mode=mode)
 
     final = Decision(
-        allowed=(state == DecisionState.ALLOW),
+        allowed=(
+            state == DecisionState.ALLOW
+            or (mode == Mode.CONSULTIVE and state == DecisionState.LOG_ONLY)
+        ),
         risk_score=_safe_int(agg.total_score, 0),
         reason=f"{state.value}: " + (agg.reasons[0] if agg.reasons else "ok"),
         violated_principle=(agg.top_signal.violated_principle if agg.top_signal else None),

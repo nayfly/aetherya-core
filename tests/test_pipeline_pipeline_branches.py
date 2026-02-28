@@ -82,12 +82,11 @@ def test_pipeline_audit_failure_does_not_change_decision(monkeypatch: pytest.Mon
     assert "fail_closed:audit" not in d.reason
 
 
-def test_pipeline_aggregate_returns_unknown_decision_maps_to_allow(
+def test_pipeline_aggregate_returns_unknown_decision_fails_closed_to_escalate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import aetherya.pipeline as pipeline
 
-    # Aisla procedural guard para que no explote por cfg dummy
     class NoopGuard:
         def __init__(self, *_args, **_kwargs):  # noqa: ANN001
             pass
@@ -98,7 +97,7 @@ def test_pipeline_aggregate_returns_unknown_decision_maps_to_allow(
     monkeypatch.setattr(pipeline, "ProceduralGuard", NoopGuard)
 
     class AggResult:
-        decision = "SOMETHING_NEW"
+        decision = "SOMETHING_NEW"  # unknown
         total_score = 0
         reasons = ["ok"]
         top_signal = None
@@ -113,7 +112,14 @@ def test_pipeline_aggregate_returns_unknown_decision_maps_to_allow(
 
     monkeypatch.setattr(pipeline, "RiskAggregator", Agg)
 
+    class A:
+        mode_hint = "operative"
+
+    monkeypatch.setattr(pipeline, "parse_user_input", lambda _raw: A())
+
     d = run_pipeline(
         "mode:operative hi", DummyConstitution(), actor="robert", cfg=DummyCfg(), audit=None
     )
-    assert d.allowed is True
+
+    assert d.allowed is False
+    assert d.reason.startswith("escalate:")
