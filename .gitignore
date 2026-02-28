@@ -9,6 +9,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+egg-info/
 historia/
 # Runtime artifacts
 audit/
