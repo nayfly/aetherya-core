@@ -42,11 +42,19 @@ All notable changes to this project are documented in this file.
   - corrupt signal-type injection test to assert immediate `fail_closed:risk_aggregate`
 - Added `chaos_benchmark` CLI (`python -m aetherya.chaos_benchmark`) to run repeated deterministic chaos campaigns and emit latency metrics + SLO verdict (`p95`/`p99`).
 - Added `make chaos_benchmark` local command to generate `audit/chaos/chaos_benchmark_metrics.json`.
+- Added `verify_release_artifacts` CLI (`python -m aetherya.verify_release_artifacts`) for strict release manifest attestation checks (`HMAC`, `commit_sha`, `decision_count`, phase1 audit line count).
+- Added `pipeline_benchmark` CLI (`python -m aetherya.pipeline_benchmark`) for deterministic normal-operation latency SLO checks on a 100-input corpus.
+- Added `make pipeline_benchmark` local command to generate `audit/pipeline/pipeline_benchmark_metrics.json`.
+- Added explicit `llm_shadow` audit fields:
+  - `shadow_suggestion` (dry-run textual suggestion + projected state/risk)
+  - `ethical_divergence` (state mismatch and risk delta vs core decision)
 
 ### Changed
 - CI workflow now runs `security_gate` in a dedicated job and enforces tag release readiness (`v*`) via `release_readiness` depending on `test` + `security_gate`.
 - CI `test` job now executes versioned security baseline regression on every push/PR.
 - CI now runs `chaos_tests` as a separate job with artifact upload and latency thresholds (`p95<=12ms`, `p99<=20ms`, detection rate `1.0`).
+- CI now runs `pipeline_slo` as a dedicated latency gate (`p95<=10ms`, `p99<=15ms`) over deterministic pipeline benchmark inputs.
+- `release_readiness` no longer trusts upstream success only; it now downloads `security_gate` artifacts and performs strict cryptographic/content validation before passing.
 
 ## v0.3.0 - 2026-02-28
 

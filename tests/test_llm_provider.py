@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pytest
 
+import aetherya.llm_provider as llm_provider
 from aetherya.llm_provider import (
     DryRunLLMProvider,
     LLMMessage,
@@ -172,6 +173,30 @@ def test_dry_run_provider_changes_response_when_request_changes() -> None:
 
     assert response_a.response_id != response_b.response_id
     assert response_a.metadata["request_hash"] != response_b.metadata["request_hash"]
+
+
+def test_dry_run_provider_suggested_state_can_be_deny(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(llm_provider, "_request_hash", lambda seed, request: "ffff" + ("0" * 60))
+    provider = DryRunLLMProvider(seed="test-seed")
+    request = LLMRequest(
+        model="gpt-dry",
+        messages=[LLMMessage(role="user", content="high-risk analysis")],
+        max_tokens=32,
+    )
+    response = provider.generate(request)
+    assert response.metadata["suggested_state"] == "deny"
+
+
+def test_dry_run_provider_suggested_state_can_be_allow(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(llm_provider, "_request_hash", lambda seed, request: "0000" + ("1" * 60))
+    provider = DryRunLLMProvider(seed="test-seed")
+    request = LLMRequest(
+        model="gpt-dry",
+        messages=[LLMMessage(role="user", content="low-risk analysis")],
+        max_tokens=32,
+    )
+    response = provider.generate(request)
+    assert response.metadata["suggested_state"] == "allow"
 
 
 def test_ensure_llm_provider_accepts_valid_provider() -> None:

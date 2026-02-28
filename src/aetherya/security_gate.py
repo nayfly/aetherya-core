@@ -47,6 +47,12 @@ def _resolve_attestation_key(explicit_key: str | None) -> str | None:
     return cleaned if cleaned else None
 
 
+def _resolve_commit_sha(explicit_sha: str | None) -> str:
+    raw = explicit_sha if explicit_sha is not None else os.getenv("GITHUB_SHA", "")
+    cleaned = raw.strip() if isinstance(raw, str) else ""
+    return cleaned if cleaned else "unknown"
+
+
 def _load_cases(path: Path, *, expected_version: str = "v1") -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -349,12 +355,16 @@ def _phase_release_attestation(
     policy_path: Path,
     phases: list[SecurityGatePhase],
     manifest_output: Path,
+    decision_count: int,
+    commit_sha: str,
 ) -> SecurityGatePhase:
     payload = {
         "tool": "aetherya.security_gate",
         "version": "v1",
         "ts": datetime.now(UTC).isoformat(),
         "policy_path": str(policy_path),
+        "decision_count": decision_count,
+        "commit_sha": commit_sha,
         "phases": [
             {"name": phase.name, "passed": phase.passed, "details": phase.details}
             for phase in phases
@@ -377,13 +387,19 @@ def _phase_release_attestation(
     return SecurityGatePhase(
         name="phase_3_release_attestation",
         passed=True,
-        details={"manifest_path": str(manifest_output), "signature_alg": "hmac-sha256"},
+        details={
+            "manifest_path": str(manifest_output),
+            "signature_alg": "hmac-sha256",
+            "decision_count": decision_count,
+            "commit_sha": commit_sha,
+        },
     )
 
 
 def run_security_gate(
     *,
     attestation_key: str | None = None,
+    commit_sha: str | None = None,
     policy_path: str | Path = "config/policy.yaml",
     attacks_path: str | Path = "tests/fixtures/security_corpus/v1/jailbreak_attacks.json",
     snapshots_path: str | Path = "tests/fixtures/security_corpus/v1/attack_decision_snapshots.json",
@@ -398,6 +414,7 @@ def run_security_gate(
     resolved_key = _resolve_attestation_key(attestation_key)
     if not resolved_key:
         raise ValueError("attestation key is required (arg or AETHERYA_ATTESTATION_KEY)")
+    resolved_commit_sha = _resolve_commit_sha(commit_sha)
 
     resolved_policy_path = Path(policy_path)
     resolved_attacks_path = Path(attacks_path)
@@ -427,11 +444,14 @@ def run_security_gate(
     phases: list[SecurityGatePhase] = [phase_1, phase_2]
     manifest_path: str | None = None
     if phase_1.passed and phase_2.passed:
+        decision_count = int(phase_1.details.get("total_cases", 0))
         phase_3 = _phase_release_attestation(
             attestation_key=resolved_key,
             policy_path=resolved_policy_path,
             phases=phases,
             manifest_output=resolved_manifest_output,
+            decision_count=decision_count,
+            commit_sha=resolved_commit_sha,
         )
         phases.append(phase_3)
         manifest_path = str(resolved_manifest_output)
@@ -464,6 +484,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run AETHERYA Security Gate (3-phase validation).")
     parser.add_argument(
         "--attestation-key", default=None, help="HMAC key (or use env AETHERYA_ATTESTATION_KEY)."
+    )
+    parser.add_argument(
+        "--commit-sha",
+        default=None,
+        help="Commit SHA included in manifest (or use env GITHUB_SHA).",
     )
     parser.add_argument("--policy-path", default="config/policy.yaml", help="Policy config path.")
     parser.add_argument(
@@ -515,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run_security_gate(
             attestation_key=args.attestation_key,
+            commit_sha=args.commit_sha,
             policy_path=args.policy_path,
             attacks_path=args.attacks_path,
             snapshots_path=args.snapshots_path,

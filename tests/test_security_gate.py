@@ -20,8 +20,10 @@ def _phase_by_name(phases: list[dict[str, Any]], name: str) -> dict[str, Any]:
 
 def test_run_security_gate_passes_and_writes_manifest(tmp_path: Path) -> None:
     manifest = tmp_path / "security_manifest.json"
+    commit_sha = "abc123release"
     result = run_security_gate(
         attestation_key="gate-key",
+        commit_sha=commit_sha,
         attacks_path=_FIXTURE_DIR / "jailbreak_attacks.json",
         snapshots_path=_FIXTURE_DIR / "attack_decision_snapshots.json",
         workdir=tmp_path / "gate_work",
@@ -37,6 +39,10 @@ def test_run_security_gate_passes_and_writes_manifest(tmp_path: Path) -> None:
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["signature_alg"] == "hmac-sha256"
     assert str(payload["signature"]).startswith("hmac-sha256:")
+    assert payload["decision_count"] == len(
+        json.loads((_FIXTURE_DIR / "jailbreak_attacks.json").read_text(encoding="utf-8"))["cases"]
+    )
+    assert payload["commit_sha"] == commit_sha
 
 
 def test_run_security_gate_phase1_snapshot_failure_generates_reports(tmp_path: Path) -> None:

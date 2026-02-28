@@ -169,6 +169,16 @@ class DryRunLLMProvider:
         request.validate()
 
         req_hash = _request_hash(self.seed, request)
+        suggested_risk_score = int(req_hash[:4], 16) % 101
+        if suggested_risk_score >= 80:
+            suggested_state = "deny"
+        elif suggested_risk_score >= 50:
+            suggested_state = "require_confirm"
+        elif suggested_risk_score > 0:
+            suggested_state = "log_only"
+        else:
+            suggested_state = "allow"
+
         last_user_content = ""
         for message in reversed(request.messages):
             if message.role.strip().lower() == "user":
@@ -183,7 +193,8 @@ class DryRunLLMProvider:
 
         output_text = (
             f"[dry-run] provider={self.provider_name} model={request.model.strip()} "
-            f"preview={preview} trace={req_hash[:12]}"
+            f"preview={preview} suggestion={suggested_state} "
+            f"suggested_risk={suggested_risk_score} trace={req_hash[:12]}"
         )
         prompt_tokens = sum(
             max(1, len(message.content.strip().split())) for message in request.messages
@@ -203,7 +214,12 @@ class DryRunLLMProvider:
             finish_reason=LLMFinishReason.DRY_RUN.value,
             usage=usage,
             dry_run=True,
-            metadata={"request_hash": req_hash, "seed": self.seed},
+            metadata={
+                "request_hash": req_hash,
+                "seed": self.seed,
+                "suggested_state": suggested_state,
+                "suggested_risk_score": suggested_risk_score,
+            },
         )
         response.validate()
         return response

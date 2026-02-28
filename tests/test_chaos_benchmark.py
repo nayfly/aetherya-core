@@ -241,6 +241,48 @@ def test_run_single_chaos_fallback_exhausts_when_no_mutation(
     assert mode == "chain_validation"
 
 
+def test_run_single_chaos_sets_json_corruption_mode_on_verify_value_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "chaos_run_json_error.jsonl"
+
+    def fake_writer(
+        path: Path,
+        *,
+        total: int,  # noqa: ARG001
+        attestation_key: str,  # noqa: ARG001
+        done,  # noqa: ANN001
+    ) -> None:
+        path.write_text("{}\n", encoding="utf-8")
+        done.set()
+
+    def fake_mutator(
+        path: Path,
+        done,
+        mutation_counter: list[int],
+        rng_seed: int,  # noqa: ANN001, ARG001
+    ) -> None:
+        mutation_counter[0] = 1
+        done.set()
+
+    def fake_verify(*args, **kwargs):  # noqa: ANN002, ANN003, ARG001
+        raise ValueError("invalid JSON in audit")
+
+    monkeypatch.setattr(chaos_benchmark, "_writer", fake_writer)
+    monkeypatch.setattr(chaos_benchmark, "_mutator", fake_mutator)
+    monkeypatch.setattr(chaos_benchmark, "verify_audit_file", fake_verify)
+
+    mutations, _, detected, mode = chaos_benchmark._run_single_chaos(  # noqa: SLF001
+        path=path,
+        events=2,
+        attestation_key="chaos-key",
+        run_seed=9,
+    )
+    assert mutations == 1
+    assert detected is True
+    assert mode == "json_corruption"
+
+
 def test_run_chaos_benchmark_handles_undetected_runs(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

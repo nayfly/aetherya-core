@@ -576,6 +576,17 @@ def run_pipeline(
                 },
             )
             response = provider.generate(request)
+            suggested_state_raw = response.metadata.get("suggested_state", final.state)
+            suggested_state = (
+                suggested_state_raw.strip()
+                if isinstance(suggested_state_raw, str) and suggested_state_raw.strip()
+                else final.state
+            )
+            suggested_risk_score = _safe_int(
+                response.metadata.get("suggested_risk_score", final.risk_score),
+                final.risk_score,
+            )
+            risk_delta = suggested_risk_score - final.risk_score
             llm_shadow = {
                 "enabled": True,
                 "provider": response.provider,
@@ -589,6 +600,16 @@ def run_pipeline(
                     "total_tokens": response.usage.total_tokens,
                 },
                 "request_hash": str(response.metadata.get("request_hash", "")),
+                "shadow_suggestion": {
+                    "text": response.output_text,
+                    "suggested_state": suggested_state,
+                    "suggested_risk_score": suggested_risk_score,
+                },
+                "ethical_divergence": {
+                    "state_mismatch": suggested_state != final.state,
+                    "risk_delta": risk_delta,
+                    "absolute_risk_delta": abs(risk_delta),
+                },
             }
     except Exception as exc:
         llm_shadow = {

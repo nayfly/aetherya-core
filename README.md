@@ -3,7 +3,7 @@
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.4.0-informational)
+![Version](https://img.shields.io/badge/version-0.5.0-informational)
 
 A deterministic, risk-aware policy engine for evaluating actions under constitutional constraints and procedural safeguards.
 
@@ -92,6 +92,7 @@ Deterministic provider contract before real LLM integration:
 - `LLMProvider` protocol
 - `DryRunLLMProvider` for safe local simulations (no external calls)
 - `llm_shadow` mode in pipeline for non-executing telemetry
+- `shadow_suggestion` + `ethical_divergence` trace for shadow-vs-core decision drift
 
 ### Policy Decision Adapter (Decoupled Contract)
 
@@ -147,6 +148,12 @@ Run chaos benchmark with latency SLO thresholds:
 
 ```bash
 make chaos_benchmark
+```
+
+Run deterministic pipeline latency benchmark (100-input SLO suite):
+
+```bash
+make pipeline_benchmark
 ```
 
 ## Render Explainability Graph
@@ -216,6 +223,22 @@ In CI, `security_gate` runs as an explicit job and tag releases (`v*`) are block
 - detection rate required = `1.0`
 
 Each run uploads `audit/chaos/chaos_benchmark_metrics.json` as build artifact.
+
+`pipeline_slo` runs independently in CI and enforces normal-operation latency SLOs over a deterministic 100-input corpus:
+- `p95 <= 10ms`
+- `p99 <= 15ms`
+
+`release_readiness` now validates signed artifacts (`security_manifest.json`) with strict checks:
+- manifest must be present and non-empty
+- HMAC signature must be valid
+- `commit_sha` must match release commit
+- `decision_count` must match expected corpus size and phase1 audit line count
+
+Manual verification command:
+
+```bash
+AETHERYA_ATTESTATION_KEY="your-key" GITHUB_SHA="$(git rev-parse HEAD)" python -m aetherya.verify_release_artifacts --manifest-path audit/security_gate/security_manifest.json --phase1-audit-path audit/security_gate/phase1_corpus_audit.jsonl
+```
 
 ## Versioned Security Baseline
 
