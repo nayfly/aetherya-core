@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -262,6 +263,48 @@ def test_pipeline_llm_shadow_openai_provider_failure_is_swallowed(
     assert llm_shadow["error_type"] == "RuntimeError"
 
 
+def test_pipeline_llm_shadow_timeout_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    policy_path = write_policy(
+        tmp_path,
+        lambda data: data["llm_shadow"].update(
+            {
+                "enabled": True,
+                "provider": "dry_run",
+                "timeout_sec": 0.01,
+            }
+        ),
+    )
+    cfg = load_policy_config(policy_path)
+    audit_path = tmp_path / "decisions.jsonl"
+    audit = AuditLogger(audit_path)
+
+    class SlowProvider:
+        def generate(self, request):  # noqa: ANN001
+            time.sleep(0.1)
+            return request
+
+    monkeypatch.setattr(pipeline, "_build_llm_shadow_provider", lambda shadow_cfg: SlowProvider())
+
+    start = time.perf_counter()
+    decision = run_pipeline(
+        "help user", constitution=make_core(), actor="robert", cfg=cfg, audit=audit
+    )
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+    assert decision.allowed is True
+    assert elapsed_ms < 80.0
+
+    event = read_last_event(audit_path)
+    llm_shadow = event["context"]["llm_shadow"]
+    assert llm_shadow["enabled"] is True
+    assert llm_shadow["provider_configured"] == "dry_run"
+    assert llm_shadow["error_type"] == "TimeoutError"
+
+
 def test_build_llm_shadow_provider_rejects_unsupported_provider() -> None:
     import aetherya.pipeline as pipeline
     from aetherya.config import LLMShadowConfig
@@ -277,3 +320,54 @@ def test_build_llm_shadow_provider_rejects_unsupported_provider() -> None:
 
     with pytest.raises(ValueError, match="unsupported llm_shadow.provider"):
         pipeline._build_llm_shadow_provider(bad_cfg)  # noqa: SLF001
+
+
+def test_call_with_timeout_zero_or_negative_runs_inline() -> None:
+    import aetherya.pipeline as pipeline
+
+    called = {"value": False}
+
+    def callback() -> str:
+        called["value"] = True
+        return "ok-inline"
+
+    result = pipeline._call_with_timeout(  # noqa: SLF001
+        callback=callback,
+        timeout_sec=0.0,
+        timeout_label="llm_shadow",
+    )
+    assert result == "ok-inline"
+    assert called["value"] is True
+
+
+def test_call_with_timeout_raises_when_worker_sets_no_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    class DummyEvent:
+        def wait(self, timeout: float | None = None) -> None:  # noqa: ARG002
+            return None
+
+        def is_set(self) -> bool:
+            return True
+
+        def set(self) -> None:
+            return None
+
+    class DummyThread:
+        def __init__(self, target, daemon: bool):  # noqa: ANN001, ARG002
+            self._target = target
+
+        def start(self) -> None:
+            return None
+
+    monkeypatch.setattr(pipeline.threading, "Event", DummyEvent)
+    monkeypatch.setattr(pipeline.threading, "Thread", DummyThread)
+
+    with pytest.raises(RuntimeError, match="llm_shadow returned no response"):
+        pipeline._call_with_timeout(  # noqa: SLF001
+            callback=lambda: "ignored",
+            timeout_sec=0.1,
+            timeout_label="llm_shadow",
+        )

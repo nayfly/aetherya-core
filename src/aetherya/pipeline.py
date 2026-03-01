@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from aetherya.actions import Decision, validate_action_request, validate_actor
@@ -139,6 +140,37 @@ def _build_llm_shadow_provider(shadow_cfg: LLMShadowConfig) -> Any:
     if provider == "openai":
         return OpenAILLMProvider(timeout_sec=shadow_cfg.timeout_sec)
     raise ValueError(f"unsupported llm_shadow.provider: {shadow_cfg.provider}")
+
+
+def _call_with_timeout(*, callback: Any, timeout_sec: float, timeout_label: str) -> Any:
+    if timeout_sec <= 0.0:
+        return callback()
+
+    done = threading.Event()
+    payload: dict[str, Any] = {}
+
+    def _worker() -> None:
+        try:
+            payload["response"] = callback()
+        except Exception as exc:  # pragma: no cover - surfaced via payload branch
+            payload["error"] = exc
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    done.wait(timeout=float(timeout_sec))
+    if not done.is_set():
+        raise TimeoutError(f"{timeout_label} timed out after {timeout_sec:.3f}s")
+
+    error = payload.get("error")
+    if isinstance(error, Exception):
+        raise error
+
+    if "response" not in payload:
+        raise RuntimeError(f"{timeout_label} returned no response")
+
+    return payload["response"]
 
 
 def _default_policy_adapter_shadow_config() -> PolicyAdapterShadowConfig:
@@ -565,7 +597,6 @@ def run_pipeline(
     try:
         shadow_cfg = _llm_shadow_cfg(cfg)
         if shadow_cfg.enabled:
-            provider = _build_llm_shadow_provider(shadow_cfg)
             request = LLMRequest(
                 model=shadow_cfg.model,
                 messages=[
@@ -586,7 +617,16 @@ def run_pipeline(
                     "policy_fingerprint": policy_fingerprint,
                 },
             )
-            response = provider.generate(request)
+
+            def _shadow_call() -> Any:
+                provider = _build_llm_shadow_provider(shadow_cfg)
+                return provider.generate(request)
+
+            response = _call_with_timeout(
+                callback=_shadow_call,
+                timeout_sec=shadow_cfg.timeout_sec,
+                timeout_label="llm_shadow",
+            )
             suggested_state_raw = response.metadata.get("suggested_state", final.state)
             suggested_state = (
                 suggested_state_raw.strip()

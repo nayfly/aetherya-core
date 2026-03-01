@@ -152,6 +152,43 @@ Optional OpenAI shadow integration:
 pip install -e ".[dev,llm]"
 ```
 
+## CLI
+
+Evaluate one input through the deterministic pipeline:
+
+```bash
+aetherya decide "mode:operative tool:shell target:host-1 param.command=echo_ok run diagnostics" --actor robert --json
+```
+
+Disable shadow waiting for bulk automation:
+
+```bash
+aetherya decide "help user" --no-wait-shadow --json
+```
+
+Use custom constitution and audit file:
+
+```bash
+aetherya decide "forbidden_token now" --constitution-path config/constitution.yaml --audit-path audit/decisions.jsonl --json
+```
+
+Unified wrappers over existing module CLIs:
+
+```bash
+aetherya audit verify -- --audit-path audit/decisions.jsonl --require-hmac --require-chain --json
+aetherya explainability render -- --audit-path audit/decisions.jsonl --event-index -1
+aetherya explainability report -- --audit-path audit/decisions.jsonl --event-index -1 --output audit/explainability_report.html
+aetherya security gate -- --json
+aetherya security baseline -- --json
+aetherya release verify-artifacts -- --expected-commit-sha "$(git rev-parse HEAD)" --json
+aetherya benchmark pipeline -- --runs 1 --corpus-size 100 --json
+aetherya benchmark chaos -- --runs 25 --events 48 --json
+```
+
+Note:
+- Wrapper subcommands forward arguments to the existing internal CLIs.
+- Use `--` before forwarded flags for maximum compatibility in shell automation.
+
 ## Running tests
 
 ```bash
@@ -217,6 +254,15 @@ Run OpenAI shadow smoke test (real provider, authority invariance check):
 ```bash
 make openai_shadow_smoke
 ```
+
+Run final pre-API CLI devil gate (actor spoofing, shadow timeout, chain integrity):
+
+```bash
+make pre_api_gate
+```
+
+This command writes a JSON report to:
+- `audit/pre_api/pre_api_gate_report.json`
 
 ## OpenAI Shadow Mode
 

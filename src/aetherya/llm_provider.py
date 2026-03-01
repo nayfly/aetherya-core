@@ -274,6 +274,7 @@ class OpenAILLMProvider:
         client_kwargs: dict[str, Any] = {
             "api_key": resolved_api_key,
             "timeout": float(timeout_sec),
+            "max_retries": 0,
         }
         if isinstance(base_url, str) and base_url.strip():
             client_kwargs["base_url"] = base_url.strip()

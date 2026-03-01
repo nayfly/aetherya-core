@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Added
+- Added unified CLI entrypoint scaffold (`aetherya`) with initial `decide` command.
+- Added `aetherya decide` features:
+  - positional/flag/stdin input support
+  - optional `--constitution-path` loader (YAML/JSON)
+  - optional `--audit-path` logging output
+  - `--wait-shadow` / `--no-wait-shadow` toggle (default waits)
+  - JSON/text output with execution metadata
+- Added CLI wrapper subcommands that forward to existing module CLIs:
+  - `aetherya audit verify`
+  - `aetherya explainability render/report`
+  - `aetherya security gate/baseline`
+  - `aetherya release verify-artifacts`
+  - `aetherya benchmark pipeline/chaos`
 - Added real OpenAI shadow provider integration via `OpenAILLMProvider` (`OPENAI_API_KEY`, lazy SDK import, timeout support).
 - Added config surface for LLM shadow provider selection and transport controls:
   - `llm_shadow.provider` (`dry_run`/`openai`)
@@ -13,9 +26,15 @@ All notable changes to this project are documented in this file.
   - provider contract mapping to `LLMResponse`
   - pipeline `shadow-only` authority (no impact on core `allowed` decision)
   - fail-safe behavior when OpenAI provider initialization fails
+- Added CLI regression tests for `decide` behavior (`stdin`, constitution loading, shadow wait toggle, conflicting input handling).
+- Added CLI routing tests for wrapper argument forwarding and nested command validation.
 - Added reusable real-provider smoke test script:
   - `scripts/openai_shadow_smoke.py`
   - `make openai_shadow_smoke`
+- Added final pre-API CLI devil gate script:
+  - `scripts/pre_api_gate.py`
+  - `make pre_api_gate`
+  - validates actor spoofing fail-closed behavior, shadow timeout resilience, and audit chain integrity/tamper detection in one command.
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.

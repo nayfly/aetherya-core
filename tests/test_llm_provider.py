@@ -452,6 +452,7 @@ def test_openai_provider_generate_maps_chat_completion_response(
 
     client = provider._client  # noqa: SLF001
     assert client.kwargs["timeout"] == 3.5
+    assert client.kwargs["max_retries"] == 0
     assert client.chat.completions.last_kwargs["model"] == "gpt-4o-mini"
 
 
@@ -512,6 +513,7 @@ def test_openai_provider_includes_base_url_and_usage_fallback(
 
     client = provider._client  # noqa: SLF001
     assert client.kwargs["base_url"] == "https://proxy.local/v1"
+    assert client.kwargs["max_retries"] == 0
 
 
 def test_openai_provider_rejects_completion_with_empty_choices(

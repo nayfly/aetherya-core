@@ -62,3 +62,6 @@ llm = [
 [project]
 name = "aetherya-core"
 version = "0.3.0"
+
+[project.scripts]
+aetherya = "aetherya.cli:main"

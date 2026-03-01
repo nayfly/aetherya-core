@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate
 
 fmt:
 	ruff format src tests
@@ -39,3 +39,6 @@ audit_fuzz:
 
 openai_shadow_smoke:
 	PYTHONPATH=src python scripts/openai_shadow_smoke.py --json
+
+pre_api_gate:
+	python scripts/pre_api_gate.py
