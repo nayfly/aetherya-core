@@ -13,10 +13,14 @@ All notable changes to this project are documented in this file.
   - provider contract mapping to `LLMResponse`
   - pipeline `shadow-only` authority (no impact on core `allowed` decision)
   - fail-safe behavior when OpenAI provider initialization fails
+- Added reusable real-provider smoke test script:
+  - `scripts/openai_shadow_smoke.py`
+  - `make openai_shadow_smoke`
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.
 - README now documents `OpenAI` shadow mode setup and safety contract.
+- README architecture section now matches actual deterministic `run_pipeline` execution order and fail-closed behavior.
 - Added optional dependency group `llm` with `openai>=1.0.0`.
 
 ## v0.5.0 - 2026-03-01

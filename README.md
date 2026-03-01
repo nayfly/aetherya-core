@@ -36,15 +36,39 @@ This enables:
 ```mermaid
 flowchart LR
     Input --> Parser
-    Parser --> ProceduralGuard
-    Parser --> Constitution
-    ProceduralGuard --> Signals
-    Constitution --> Signals
-    Signals --> RiskAggregator
-    RiskAggregator --> DecisionState
-    DecisionState --> FinalDecision
+    Parser --> ActionContract
+    ActionContract --> Mode
+    Mode --> ExecutionGate
+    ExecutionGate --> CapabilityGate
+    CapabilityGate --> JailbreakGuard
+    JailbreakGuard --> ProceduralGuard
+    ProceduralGuard --> Constitution
+    Constitution --> RiskAggregator
+    RiskAggregator --> ConfirmationGate
+    ConfirmationGate --> PolicyEngine
+    PolicyEngine --> FinalDecision
+
+    RiskAggregator --> Explainability
+    FinalDecision --> LLMShadow
+    FinalDecision --> PolicyAdapterShadow
+
     FinalDecision --> Audit
+    Explainability --> Audit
+    LLMShadow --> Audit
+    PolicyAdapterShadow --> Audit
 ```
+
+Deterministic runtime order:
+- Parse + ABI contracts (`actor`, `action`)
+- Guard chain (`execution_gate` -> `capability_gate` -> `jailbreak_guard` -> `procedural_guard`)
+- Constitution signal evaluation
+- Risk aggregation + optional strong confirmation
+- Policy state mapping and decision contract
+- Explainability + shadow telemetry (`llm_shadow`, `policy_adapter_shadow`)
+- Audit logging (`decision_id`, `context_hash`, chain/hash attestation)
+
+Fail-closed guarantee:
+- Any exception in parser/contracts/gates/constitution/aggregation/confirmation/decision contract returns `fail_closed:*` with `allowed=false`.
 
 ## Core Components
 
@@ -188,6 +212,12 @@ Run LLM shadow tests (dry-run + OpenAI provider selection paths):
 pytest tests/test_llm_provider.py tests/test_pipeline_llm_shadow.py -q
 ```
 
+Run OpenAI shadow smoke test (real provider, authority invariance check):
+
+```bash
+make openai_shadow_smoke
+```
+
 ## OpenAI Shadow Mode
 
 Policy snippet:
@@ -210,6 +240,9 @@ Safety contract:
 - OpenAI runs in `shadow-only`
 - pipeline still decides `allowed` from deterministic core gates/aggregator
 - LLM output is stored only under `context.llm_shadow`
+
+Reusable smoke script:
+- `scripts/openai_shadow_smoke.py`
 
 ## Render Explainability Graph
 

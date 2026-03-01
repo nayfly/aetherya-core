@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke
 
 fmt:
 	ruff format src tests
@@ -36,3 +36,6 @@ property_tests:
 audit_fuzz:
 	pytest tests/test_release_artifact_fuzz.py -q
 	python -m aetherya.security_gate --phase2-mutation-rounds 64 --json > audit/security_gate/security_gate_fuzz64.json
+
+openai_shadow_smoke:
+	PYTHONPATH=src python scripts/openai_shadow_smoke.py --json
