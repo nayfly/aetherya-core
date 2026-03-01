@@ -55,6 +55,9 @@ dev = [
   "types-PyYAML",
   "pre-commit",
 ]
+llm = [
+  "openai>=1.0.0",
+]
 
 [project]
 name = "aetherya-core"

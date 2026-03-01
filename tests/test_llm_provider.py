@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from dataclasses import dataclass
 
 import pytest
@@ -11,6 +13,7 @@ from aetherya.llm_provider import (
     LLMRequest,
     LLMResponse,
     LLMUsage,
+    OpenAILLMProvider,
     ensure_llm_provider,
 )
 
@@ -352,3 +355,198 @@ def test_llm_response_validate_rejects_non_dict_metadata() -> None:
     )
     with pytest.raises(ValueError, match="metadata must be dict"):
         response.validate()
+
+
+def test_openai_provider_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        OpenAILLMProvider()
+
+
+def test_openai_provider_rejects_non_positive_timeout() -> None:
+    with pytest.raises(ValueError, match="timeout_sec must be > 0"):
+        OpenAILLMProvider(api_key="sk-test", timeout_sec=0.0)
+
+
+def test_openai_provider_import_error_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(name: str):  # noqa: ANN202
+        raise ImportError(name)
+
+    monkeypatch.setattr(llm_provider.importlib, "import_module", _boom)
+    with pytest.raises(RuntimeError, match="openai package is not installed"):
+        OpenAILLMProvider(api_key="sk-test")
+
+
+def test_openai_provider_raises_when_sdk_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_module = types.ModuleType("openai")
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+    with pytest.raises(RuntimeError, match="openai package is not installed"):
+        OpenAILLMProvider(api_key="sk-test")
+
+
+def test_openai_provider_generate_maps_chat_completion_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeUsage:
+        prompt_tokens = 7
+        completion_tokens = 5
+        total_tokens = 12
+
+    class FakeMessage:
+        content = "shadow verdict text"
+
+    class FakeChoice:
+        message = FakeMessage()
+        finish_reason = "length"
+
+    class FakeCompletion:
+        id = "chatcmpl-test"
+        model = "gpt-4o-mini"
+        usage = FakeUsage()
+        choices = [FakeChoice()]
+
+    class FakeCompletions:
+        def __init__(self) -> None:
+            self.last_kwargs: dict[str, object] = {}
+
+        def create(self, **kwargs):  # noqa: ANN003,ANN202
+            self.last_kwargs = dict(kwargs)
+            return FakeCompletion()
+
+    class FakeChat:
+        def __init__(self) -> None:
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = dict(kwargs)
+            self.chat = FakeChat()
+
+    fake_module = types.ModuleType("openai")
+    fake_module.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    provider = OpenAILLMProvider(api_key="sk-test", timeout_sec=3.5)
+    request = LLMRequest(
+        model="gpt-4o-mini",
+        messages=[
+            LLMMessage(role="system", content="shadow mode"),
+            LLMMessage(role="user", content="analyze safely"),
+        ],
+        temperature=0.1,
+        max_tokens=24,
+    )
+
+    response = provider.generate(request)
+    assert response.provider == "openai"
+    assert response.dry_run is False
+    assert response.finish_reason == "length"
+    assert response.usage.total_tokens == 12
+    assert response.metadata["request_hash"]
+    assert response.metadata["suggested_state"] in {
+        "allow",
+        "log_only",
+        "require_confirm",
+        "deny",
+    }
+
+    client = provider._client  # noqa: SLF001
+    assert client.kwargs["timeout"] == 3.5
+    assert client.chat.completions.last_kwargs["model"] == "gpt-4o-mini"
+
+
+def test_openai_provider_includes_base_url_and_usage_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeUsage:
+        prompt_tokens = "bad"
+        completion_tokens = None
+        total_tokens = "still-bad"
+
+    class FakeMessage:
+        content = 42
+
+    class FakeChoice:
+        message = FakeMessage()
+        finish_reason = "unknown_reason"
+
+    class FakeCompletion:
+        id = ""
+        model = ""
+        usage = FakeUsage()
+        choices = [FakeChoice()]
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003,ANN202
+            return FakeCompletion()
+
+    class FakeChat:
+        def __init__(self) -> None:
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = dict(kwargs)
+            self.chat = FakeChat()
+
+    fake_module = types.ModuleType("openai")
+    fake_module.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    provider = OpenAILLMProvider(api_key="sk-test", base_url="https://proxy.local/v1")
+    response = provider.generate(
+        LLMRequest(
+            model="gpt-4o-mini",
+            messages=[LLMMessage(role="user", content="hello")],
+            max_tokens=16,
+        )
+    )
+
+    assert response.finish_reason == "stop"
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.completion_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.response_id.startswith("openai:")
+    assert response.model == "gpt-4o-mini"
+    assert response.output_text == "42"
+
+    client = provider._client  # noqa: SLF001
+    assert client.kwargs["base_url"] == "https://proxy.local/v1"
+
+
+def test_openai_provider_rejects_completion_with_empty_choices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeCompletion:
+        choices: list[object] = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003,ANN202
+            return FakeCompletion()
+
+    class FakeChat:
+        def __init__(self) -> None:
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003,ARG002
+            self.chat = FakeChat()
+
+    fake_module = types.ModuleType("openai")
+    fake_module.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    provider = OpenAILLMProvider(api_key="sk-test")
+    with pytest.raises(RuntimeError, match="openai returned no choices"):
+        provider.generate(
+            LLMRequest(
+                model="gpt-4o-mini",
+                messages=[LLMMessage(role="user", content="hello")],
+                max_tokens=16,
+            )
+        )
+
+
+def test_openai_finish_reason_and_coerce_helpers_cover_stop_branch() -> None:
+    assert llm_provider._map_openai_finish_reason("unexpected") == "stop"  # noqa: SLF001
+    assert llm_provider._coerce_int("bad", 5) == 5  # noqa: SLF001

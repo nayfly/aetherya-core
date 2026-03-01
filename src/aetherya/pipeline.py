@@ -20,7 +20,7 @@ from aetherya.constitution import Constitution
 from aetherya.execution_gate import ExecutionGate
 from aetherya.explainability import ExplainabilityEngine
 from aetherya.jailbreak import JailbreakGuard
-from aetherya.llm_provider import DryRunLLMProvider, LLMMessage, LLMRequest
+from aetherya.llm_provider import DryRunLLMProvider, LLMMessage, LLMRequest, OpenAILLMProvider
 from aetherya.modes import Mode
 from aetherya.parser import parse_user_input
 from aetherya.policy_decision_adapter import (
@@ -117,9 +117,11 @@ def _policy_fingerprint(cfg: PolicyConfig | Any) -> str | None:
 def _default_llm_shadow_config() -> LLMShadowConfig:
     return LLMShadowConfig(
         enabled=False,
+        provider="dry_run",
         model="gpt-dry",
         temperature=0.0,
         max_tokens=128,
+        timeout_sec=10.0,
     )
 
 
@@ -128,6 +130,15 @@ def _llm_shadow_cfg(cfg: PolicyConfig | Any) -> LLMShadowConfig:
     if isinstance(llm_shadow_cfg, LLMShadowConfig):
         return llm_shadow_cfg
     return _default_llm_shadow_config()
+
+
+def _build_llm_shadow_provider(shadow_cfg: LLMShadowConfig) -> Any:
+    provider = shadow_cfg.provider.strip().lower()
+    if provider == "dry_run":
+        return DryRunLLMProvider(seed="aetherya-shadow:v1")
+    if provider == "openai":
+        return OpenAILLMProvider(timeout_sec=shadow_cfg.timeout_sec)
+    raise ValueError(f"unsupported llm_shadow.provider: {shadow_cfg.provider}")
 
 
 def _default_policy_adapter_shadow_config() -> PolicyAdapterShadowConfig:
@@ -554,7 +565,7 @@ def run_pipeline(
     try:
         shadow_cfg = _llm_shadow_cfg(cfg)
         if shadow_cfg.enabled:
-            provider = DryRunLLMProvider(seed="aetherya-shadow:v1")
+            provider = _build_llm_shadow_provider(shadow_cfg)
             request = LLMRequest(
                 model=shadow_cfg.model,
                 messages=[
@@ -589,6 +600,7 @@ def run_pipeline(
             risk_delta = suggested_risk_score - final.risk_score
             llm_shadow = {
                 "enabled": True,
+                "provider_configured": shadow_cfg.provider,
                 "provider": response.provider,
                 "model": response.model,
                 "response_id": response.response_id,
@@ -614,6 +626,7 @@ def run_pipeline(
     except Exception as exc:
         llm_shadow = {
             "enabled": True,
+            "provider_configured": _llm_shadow_cfg(cfg).provider,
             "error_type": type(exc).__name__,
             "error": str(exc),
         }

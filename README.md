@@ -85,14 +85,16 @@ Builds a deterministic justification graph per decision:
 - graph nodes/edges from signals to aggregate and final state
 - explicit transition from aggregate decision to final policy state
 
-### LLM Provider (Dry Run)
+### LLM Provider (Shadow-Only)
 
-Deterministic provider contract before real LLM integration:
+Provider contract for non-authoritative telemetry:
 - `LLMRequest` / `LLMResponse` typed contracts
 - `LLMProvider` protocol
-- `DryRunLLMProvider` for safe local simulations (no external calls)
+- `DryRunLLMProvider` for deterministic local simulations (no external calls)
+- `OpenAILLMProvider` for real external shadow suggestions (`OPENAI_API_KEY`)
 - `llm_shadow` mode in pipeline for non-executing telemetry
 - `shadow_suggestion` + `ethical_divergence` trace for shadow-vs-core decision drift
+- core decision authority remains in ÆTHERYA (LLM output never overrides `allowed`)
 
 ### Policy Decision Adapter (Decoupled Contract)
 
@@ -118,6 +120,12 @@ Future-proof adapter layer for external context engines (LLM, vector DB, etc.) w
 
 ```bash
 pip install -e ".[dev]"
+```
+
+Optional OpenAI shadow integration:
+
+```bash
+pip install -e ".[dev,llm]"
 ```
 
 ## Running tests
@@ -173,6 +181,35 @@ Run 10-minute memory soak over repeated pipeline benchmark loops:
 ```bash
 make pipeline_memory_soak
 ```
+
+Run LLM shadow tests (dry-run + OpenAI provider selection paths):
+
+```bash
+pytest tests/test_llm_provider.py tests/test_pipeline_llm_shadow.py -q
+```
+
+## OpenAI Shadow Mode
+
+Policy snippet:
+
+```yaml
+llm_shadow:
+  enabled: true
+  provider: openai
+  model: gpt-4o-mini
+  temperature: 0.0
+  max_tokens: 96
+  timeout_sec: 10.0
+```
+
+Runtime requirements:
+- `OPENAI_API_KEY` exported in environment
+- optional dependency installed: `pip install -e ".[dev,llm]"`
+
+Safety contract:
+- OpenAI runs in `shadow-only`
+- pipeline still decides `allowed` from deterministic core gates/aggregator
+- LLM output is stored only under `context.llm_shadow`
 
 ## Render Explainability Graph
 

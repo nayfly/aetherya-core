@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import math
+import os
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -159,6 +161,30 @@ def _request_hash(seed: str, request: LLMRequest) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _state_from_risk_score(score: int) -> str:
+    if score >= 80:
+        return "deny"
+    if score >= 50:
+        return "require_confirm"
+    if score > 0:
+        return "log_only"
+    return "allow"
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _map_openai_finish_reason(raw: Any) -> str:
+    cleaned = str(raw).strip().lower() if raw is not None else ""
+    if cleaned == LLMFinishReason.LENGTH.value:
+        return LLMFinishReason.LENGTH.value
+    return LLMFinishReason.STOP.value
+
+
 class DryRunLLMProvider:
     provider_name = "dry_run"
 
@@ -170,14 +196,7 @@ class DryRunLLMProvider:
 
         req_hash = _request_hash(self.seed, request)
         suggested_risk_score = int(req_hash[:4], 16) % 101
-        if suggested_risk_score >= 80:
-            suggested_state = "deny"
-        elif suggested_risk_score >= 50:
-            suggested_state = "require_confirm"
-        elif suggested_risk_score > 0:
-            suggested_state = "log_only"
-        else:
-            suggested_state = "allow"
+        suggested_state = _state_from_risk_score(suggested_risk_score)
 
         last_user_content = ""
         for message in reversed(request.messages):
@@ -217,6 +236,120 @@ class DryRunLLMProvider:
             metadata={
                 "request_hash": req_hash,
                 "seed": self.seed,
+                "suggested_state": suggested_state,
+                "suggested_risk_score": suggested_risk_score,
+            },
+        )
+        response.validate()
+        return response
+
+
+class OpenAILLMProvider:
+    provider_name = "openai"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout_sec: float = 10.0,
+    ) -> None:
+        if timeout_sec <= 0.0:
+            raise ValueError("timeout_sec must be > 0")
+
+        resolved_api_key = (
+            api_key.strip() if isinstance(api_key, str) else os.getenv("OPENAI_API_KEY", "").strip()
+        )
+        if not resolved_api_key:
+            raise ValueError("OPENAI_API_KEY is required for OpenAILLMProvider")
+
+        try:
+            openai_module = importlib.import_module("openai")
+        except ImportError as exc:
+            raise RuntimeError("openai package is not installed") from exc
+        openai_client_cls = getattr(openai_module, "OpenAI", None)
+        if not callable(openai_client_cls):
+            raise RuntimeError("openai package is not installed")
+
+        client_kwargs: dict[str, Any] = {
+            "api_key": resolved_api_key,
+            "timeout": float(timeout_sec),
+        }
+        if isinstance(base_url, str) and base_url.strip():
+            client_kwargs["base_url"] = base_url.strip()
+
+        self._client = openai_client_cls(**client_kwargs)
+        self._seed = "aetherya:openai:v1"
+
+    def generate(self, request: LLMRequest) -> LLMResponse:
+        request.validate()
+
+        req_hash = _request_hash(self._seed, request)
+        payload_messages = [message.normalized() for message in request.messages]
+        completion = self._client.chat.completions.create(
+            model=request.model.strip(),
+            messages=[
+                {"role": item["role"], "content": item["content"]} for item in payload_messages
+            ],
+            temperature=float(request.temperature),
+            max_tokens=int(request.max_tokens),
+        )
+
+        choices = list(getattr(completion, "choices", []) or [])
+        if not choices:
+            raise RuntimeError("openai returned no choices")
+
+        first_choice = choices[0]
+        message = getattr(first_choice, "message", None)
+        output_text_raw = getattr(message, "content", "")
+        output_text = output_text_raw if isinstance(output_text_raw, str) else str(output_text_raw)
+        finish_reason_raw = getattr(first_choice, "finish_reason", None)
+
+        usage_raw = getattr(completion, "usage", None)
+        prompt_tokens = max(0, _coerce_int(getattr(usage_raw, "prompt_tokens", 0), 0))
+        completion_tokens = max(0, _coerce_int(getattr(usage_raw, "completion_tokens", 0), 0))
+        minimum_total = prompt_tokens + completion_tokens
+        total_tokens = max(
+            minimum_total,
+            _coerce_int(getattr(usage_raw, "total_tokens", minimum_total), minimum_total),
+        )
+
+        usage = LLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
+
+        projection_hash = hashlib.sha256(f"{req_hash}:{output_text}".encode()).hexdigest()
+        suggested_risk_score = int(projection_hash[:4], 16) % 101
+        suggested_state = _state_from_risk_score(suggested_risk_score)
+
+        response_id_raw = getattr(completion, "id", "")
+        response_id = (
+            response_id_raw.strip()
+            if isinstance(response_id_raw, str) and response_id_raw.strip()
+            else f"openai:{req_hash[:24]}"
+        )
+        model_raw = getattr(completion, "model", request.model.strip())
+        model = (
+            model_raw.strip() if isinstance(model_raw, str) and model_raw.strip() else request.model
+        )
+
+        response = LLMResponse(
+            response_id=response_id,
+            model=model,
+            provider=self.provider_name,
+            output_text=output_text,
+            finish_reason=_map_openai_finish_reason(finish_reason_raw),
+            usage=usage,
+            dry_run=False,
+            metadata={
+                "request_hash": req_hash,
+                "raw_finish_reason": (
+                    finish_reason_raw
+                    if isinstance(finish_reason_raw, str)
+                    else str(finish_reason_raw)
+                ),
                 "suggested_state": suggested_state,
                 "suggested_risk_score": suggested_risk_score,
             },

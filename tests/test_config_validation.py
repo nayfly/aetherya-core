@@ -431,9 +431,11 @@ def test_llm_shadow_defaults_when_missing(tmp_path):
     cfg = load_policy_config(path)
 
     assert cfg.llm_shadow.enabled is False
+    assert cfg.llm_shadow.provider == "dry_run"
     assert cfg.llm_shadow.model == "gpt-dry"
     assert cfg.llm_shadow.temperature == 0.0
     assert cfg.llm_shadow.max_tokens == 128
+    assert cfg.llm_shadow.timeout_sec == 10.0
 
 
 def test_llm_shadow_parsing(tmp_path):
@@ -449,9 +451,11 @@ def test_llm_shadow_parsing(tmp_path):
         "procedural_guard": {"critical_tags": [], "privileged_ops": []},
         "llm_shadow": {
             "enabled": True,
+            "provider": "openai",
             "model": "gpt-shadow",
             "temperature": 0.4,
             "max_tokens": 64,
+            "timeout_sec": 7.5,
         },
     }
 
@@ -460,9 +464,11 @@ def test_llm_shadow_parsing(tmp_path):
     cfg = load_policy_config(path)
 
     assert cfg.llm_shadow.enabled is True
+    assert cfg.llm_shadow.provider == "openai"
     assert cfg.llm_shadow.model == "gpt-shadow"
     assert cfg.llm_shadow.temperature == 0.4
     assert cfg.llm_shadow.max_tokens == 64
+    assert cfg.llm_shadow.timeout_sec == 7.5
 
 
 def test_llm_shadow_invalid_temperature_raises(tmp_path):
@@ -540,6 +546,62 @@ def test_llm_shadow_empty_model_raises(tmp_path):
     path.write_text(yaml.dump(cfg_data))
 
     with pytest.raises(ValueError, match="llm_shadow.model"):
+        load_policy_config(path)
+
+
+def test_llm_shadow_invalid_provider_raises(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "provider": "anthropic",
+            "model": "gpt-shadow",
+            "temperature": 0.2,
+            "max_tokens": 64,
+            "timeout_sec": 5.0,
+        },
+    }
+
+    path = tmp_path / "policy_shadow_bad_provider.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    with pytest.raises(ValueError, match="llm_shadow.provider"):
+        load_policy_config(path)
+
+
+def test_llm_shadow_invalid_timeout_raises(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "provider": "openai",
+            "model": "gpt-shadow",
+            "temperature": 0.2,
+            "max_tokens": 64,
+            "timeout_sec": 0.0,
+        },
+    }
+
+    path = tmp_path / "policy_shadow_bad_timeout.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    with pytest.raises(ValueError, match="llm_shadow.timeout_sec"):
         load_policy_config(path)
 
 

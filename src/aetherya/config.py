@@ -90,9 +90,11 @@ class ConfirmationConfig:
 @dataclass(frozen=True)
 class LLMShadowConfig:
     enabled: bool
+    provider: str
     model: str
     temperature: float
     max_tokens: int
+    timeout_sec: float
 
 
 @dataclass(frozen=True)
@@ -267,6 +269,10 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
 def _load_llm_shadow(raw: dict[str, Any] | None) -> LLMShadowConfig:
     data = raw or {}
 
+    provider = str(data.get("provider", "dry_run")).strip().lower()
+    if provider not in {"dry_run", "openai"}:
+        raise ValueError("llm_shadow.provider must be one of: dry_run, openai")
+
     model = str(data.get("model", "gpt-dry")).strip()
     if not model:
         raise ValueError("llm_shadow.model must be non-empty")
@@ -279,11 +285,17 @@ def _load_llm_shadow(raw: dict[str, Any] | None) -> LLMShadowConfig:
     if max_tokens <= 0:
         raise ValueError("llm_shadow.max_tokens must be > 0")
 
+    timeout_sec = float(data.get("timeout_sec", 10.0))
+    if timeout_sec <= 0.0:
+        raise ValueError("llm_shadow.timeout_sec must be > 0")
+
     return LLMShadowConfig(
         enabled=bool(data.get("enabled", False)),
+        provider=provider,
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout_sec=timeout_sec,
     )
 
 

@@ -4,7 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-- No changes yet.
+### Added
+- Added real OpenAI shadow provider integration via `OpenAILLMProvider` (`OPENAI_API_KEY`, lazy SDK import, timeout support).
+- Added config surface for LLM shadow provider selection and transport controls:
+  - `llm_shadow.provider` (`dry_run`/`openai`)
+  - `llm_shadow.timeout_sec`
+- Added OpenAI shadow regression tests to verify:
+  - provider contract mapping to `LLMResponse`
+  - pipeline `shadow-only` authority (no impact on core `allowed` decision)
+  - fail-safe behavior when OpenAI provider initialization fails
+
+### Changed
+- `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.
+- README now documents `OpenAI` shadow mode setup and safety contract.
+- Added optional dependency group `llm` with `openai>=1.0.0`.
 
 ## v0.5.0 - 2026-03-01
 
