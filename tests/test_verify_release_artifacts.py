@@ -95,6 +95,19 @@ def test_run_release_artifact_verification_fails_for_invalid_manifest_json(tmp_p
     assert any("invalid JSON" in err for err in result.errors)
 
 
+def test_run_release_artifact_verification_fails_for_manifest_invalid_utf8(tmp_path: Path) -> None:
+    manifest = tmp_path / "security_manifest.json"
+    manifest.write_bytes(b"\xff\xfe\x00")
+    result = run_release_artifact_verification(
+        manifest_path=manifest,
+        expected_commit_sha="deadbeef",
+        expected_decision_count=1,
+        attestation_key="gate-key",
+    )
+    assert result.passed is False
+    assert any("manifest is not valid UTF-8" in err for err in result.errors)
+
+
 def test_run_release_artifact_verification_fails_for_non_object_manifest(tmp_path: Path) -> None:
     manifest = tmp_path / "security_manifest.json"
     manifest.write_text(json.dumps(["bad"]), encoding="utf-8")
@@ -228,6 +241,11 @@ def test_load_expected_decision_count_error_paths(tmp_path: Path) -> None:
     empty_cases.write_text(json.dumps({"cases": ["bad"]}), encoding="utf-8")
     with pytest.raises(ValueError, match="corpus has no cases"):
         load_count(None, empty_cases)
+
+    invalid_utf8 = tmp_path / "invalid_utf8.json"
+    invalid_utf8.write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(ValueError, match="corpus is not valid UTF-8"):
+        load_count(None, invalid_utf8)
 
 
 def test_verify_manifest_signature_error_branches() -> None:

@@ -4,27 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+- No changes yet.
+
+## v0.5.0 - 2026-03-01
+
 ### Added
-- `explainability_render` CLI (`python -m aetherya.explainability_render`) to export audit explainability graphs to Mermaid.
-- `explainability_report` CLI (`python -m aetherya.explainability_report`) to export static HTML audit reports.
-- cryptographic decision attestation in audit events:
-  - `hmac-sha256` when attestation key is configured
-  - deterministic `sha256` fallback when key is absent
-- `llm_shadow` pipeline mode with dry-run provider telemetry (`usage`, `request_hash`, `finish_reason`) without action execution.
-- `audit_verify` CLI (`python -m aetherya.audit_verify`) to validate `context_hash`, `decision_id` and attestation for one event or full JSONL.
-- `audit_verify --require-hmac` strict mode to reject non-`hmac-sha256` audit events.
-- `audit_verify --require-chain` to validate `prev_chain_hash`/`chain_hash` causal integrity across full JSONL.
-- CI now runs an audit attestation self-check after test coverage using strict HMAC verification.
-- Added stress suites:
-  - high-volume audit integrity verification with sparse tampering detection
-  - high-volume jailbreak adversarial/benign regression and pipeline blocking checks
-- Added versioned security corpus fixtures at `tests/fixtures/security_corpus/v1` for realistic attack/benign regressions.
-- Added deterministic tamper campaign with lightweight mutation strategies (swap IDs, reorder windows, signature corruption, chain corruption).
-- Added `security_gate` CLI (`python -m aetherya.security_gate`) implementing:
-  - Phase 1 corpus regression against expected decision snapshots
-  - Phase 2 deterministic integrity fuzz campaign (1,000-event default)
-  - Phase 3 signed release manifest generation (HMAC)
-- `security_gate` supports optional `--failure-report-dir` to emit explainability HTML for failing corpus cases.
 - Added `policy_decision_adapter` module with a decoupled integration contract for future external intelligence providers (LLM/vector retrieval):
   - `PolicyDecisionRequest` / `PolicyDecisionResponse`
   - `PolicySignalCandidate` / `PolicyDecisionCandidate`
@@ -45,6 +29,10 @@ All notable changes to this project are documented in this file.
 - Added `verify_release_artifacts` CLI (`python -m aetherya.verify_release_artifacts`) for strict release manifest attestation checks (`HMAC`, `commit_sha`, `decision_count`, phase1 audit line count).
 - Added `pipeline_benchmark` CLI (`python -m aetherya.pipeline_benchmark`) for deterministic normal-operation latency SLO checks on a 100-input corpus.
 - Added `make pipeline_benchmark` local command to generate `audit/pipeline/pipeline_benchmark_metrics.json`.
+- Added randomized property tests for `RiskAggregator` under extreme/edge signal values.
+- Added release-artifact fuzz campaign tests (64-round corruption scenarios) for manifest/audit hardening.
+- Added `scripts/pipeline_memory_soak.py` + `make pipeline_memory_soak` to run 10-minute leak-oriented RSS monitoring loops.
+- Added `make property_tests` and `make audit_fuzz` convenience targets for pre-release stress validation.
 - Added explicit `llm_shadow` audit fields:
   - `shadow_suggestion` (dry-run textual suggestion + projected state/risk)
   - `ethical_divergence` (state mismatch and risk delta vs core decision)
@@ -55,6 +43,31 @@ All notable changes to this project are documented in this file.
 - CI now runs `chaos_tests` as a separate job with artifact upload and latency thresholds (`p95<=12ms`, `p99<=20ms`, detection rate `1.0`).
 - CI now runs `pipeline_slo` as a dedicated latency gate (`p95<=10ms`, `p99<=15ms`) over deterministic pipeline benchmark inputs.
 - `release_readiness` no longer trusts upstream success only; it now downloads `security_gate` artifacts and performs strict cryptographic/content validation before passing.
+- `verify_release_artifacts` now rejects invalid UTF-8 and non-object/invalid JSON lines in phase1 audit artifacts.
+
+## v0.4.0 - 2026-02-28
+
+### Added
+- `explainability_render` CLI (`python -m aetherya.explainability_render`) to export audit explainability graphs to Mermaid.
+- `explainability_report` CLI (`python -m aetherya.explainability_report`) to export static HTML audit reports.
+- cryptographic decision attestation in audit events:
+  - `hmac-sha256` when attestation key is configured
+  - deterministic `sha256` fallback when key is absent
+- `llm_shadow` pipeline mode with dry-run provider telemetry (`usage`, `request_hash`, `finish_reason`) without action execution.
+- `audit_verify` CLI (`python -m aetherya.audit_verify`) to validate `context_hash`, `decision_id` and attestation for one event or full JSONL.
+- `audit_verify --require-hmac` strict mode to reject non-`hmac-sha256` audit events.
+- `audit_verify --require-chain` to validate `prev_chain_hash`/`chain_hash` causal integrity across full JSONL.
+- CI audit attestation self-check after test coverage using strict HMAC verification.
+- Added stress suites:
+  - high-volume audit integrity verification with sparse tampering detection
+  - high-volume jailbreak adversarial/benign regression and pipeline blocking checks
+- Added versioned security corpus fixtures at `tests/fixtures/security_corpus/v1` for realistic attack/benign regressions.
+- Added deterministic tamper campaign with lightweight mutation strategies (swap IDs, reorder windows, signature corruption, chain corruption).
+- Added `security_gate` CLI (`python -m aetherya.security_gate`) implementing:
+  - Phase 1 corpus regression against expected decision snapshots
+  - Phase 2 deterministic integrity fuzz campaign (1,000-event default)
+  - Phase 3 signed release manifest generation (HMAC)
+- `security_gate` supports optional `--failure-report-dir` to emit explainability HTML for failing corpus cases.
 
 ## v0.3.0 - 2026-02-28
 

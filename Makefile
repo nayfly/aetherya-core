@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz
 
 fmt:
 	ruff format src tests
@@ -26,3 +26,13 @@ chaos_benchmark:
 
 pipeline_benchmark:
 	python -m aetherya.pipeline_benchmark --runs 1 --corpus-size 100 --seed 1337 --p95-max-ms 10 --p99-max-ms 15 --output audit/pipeline/pipeline_benchmark_metrics.json
+
+pipeline_memory_soak:
+	python scripts/pipeline_memory_soak.py --duration-sec 600 --runs 1 --corpus-size 100 --max-rss-growth-mb 128 --output audit/pipeline/pipeline_memory_soak.json
+
+property_tests:
+	pytest tests/test_risk_aggregator_property.py tests/test_chaos_benchmark.py -q
+
+audit_fuzz:
+	pytest tests/test_release_artifact_fuzz.py -q
+	python -m aetherya.security_gate --phase2-mutation-rounds 64 --json > audit/security_gate/security_gate_fuzz64.json

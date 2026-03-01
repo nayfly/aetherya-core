@@ -43,7 +43,10 @@ def _resolve_commit_sha(explicit_sha: str | None) -> str:
 def _load_json_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ValueError(f"manifest file not found: {path}")
-    raw_text = path.read_text(encoding="utf-8")
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"manifest is not valid UTF-8: {path}") from exc
     if not raw_text.strip():
         raise ValueError(f"manifest is empty: {path}")
 
@@ -62,7 +65,11 @@ def _load_expected_decision_count(explicit_count: int | None, corpus_path: Path)
             raise ValueError("expected_decision_count must be > 0")
         return explicit_count
 
-    payload = json.loads(corpus_path.read_text(encoding="utf-8"))
+    try:
+        raw_text = corpus_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"corpus is not valid UTF-8: {corpus_path}") from exc
+    payload = json.loads(raw_text)
     if not isinstance(payload, dict):
         raise ValueError(f"invalid corpus payload: {corpus_path}")
     raw_cases = payload.get("cases")
@@ -77,10 +84,24 @@ def _load_expected_decision_count(explicit_count: int | None, corpus_path: Path)
 def _count_jsonl_events(path: Path) -> int:
     if not path.exists():
         raise ValueError(f"audit file not found: {path}")
-    raw_text = path.read_text(encoding="utf-8")
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"audit file is not valid UTF-8: {path}") from exc
     if not raw_text.strip():
         raise ValueError(f"audit file is empty: {path}")
-    return sum(1 for line in raw_text.splitlines() if line.strip())
+    count = 0
+    for idx, line in enumerate(raw_text.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON in audit at line {idx + 1}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"audit event at line {idx + 1} must be a JSON object")
+        count += 1
+    return count
 
 
 def _verify_manifest_signature(manifest: dict[str, Any], attestation_key: str) -> bool:

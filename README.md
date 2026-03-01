@@ -112,7 +112,7 @@ Future-proof adapter layer for external context engines (LLM, vector DB, etc.) w
 - CI validated on every push
 - Dedicated `security_gate` CI job with release-time dependency (`release_readiness` on tags `v*`)
 - Audit traceability with deterministic `decision_id` + `context_hash`
-- Versioned baseline (`v0.4.0`)
+- Versioned baseline (`v0.5.0`)
 
 ## Installation
 
@@ -154,6 +154,24 @@ Run deterministic pipeline latency benchmark (100-input SLO suite):
 
 ```bash
 make pipeline_benchmark
+```
+
+Run randomized property/extreme tests (RiskAggregator + chaos paths):
+
+```bash
+make property_tests
+```
+
+Run release-artifact fuzzing + stronger phase2 mutation round:
+
+```bash
+make audit_fuzz
+```
+
+Run 10-minute memory soak over repeated pipeline benchmark loops:
+
+```bash
+make pipeline_memory_soak
 ```
 
 ## Render Explainability Graph
@@ -264,7 +282,7 @@ python -m aetherya.security_baseline --update-baseline
 
 ## Status
 
-`v0.4.0` – Stable baseline with deterministic policy pipeline, explainability and security gate.
+`v0.5.0` – Stable security-hardened baseline with deterministic policy pipeline, explainability, release artifact attestation, and pipeline latency SLO gate.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release details.
 
