@@ -120,6 +120,14 @@ Provider contract for non-authoritative telemetry:
 - `shadow_suggestion` + `ethical_divergence` trace for shadow-vs-core decision drift
 - core decision authority remains in ÆTHERYA (LLM output never overrides `allowed`)
 
+### OutputGate (Response Safety)
+
+Optional deterministic response guard to prevent toxic/insulting output:
+- evaluates candidate user-facing response text before delivery
+- emits `output_gate` risk signal (`OutputSafety`) when toxic terms are detected
+- fail-closed on internal gate errors (`fail_closed:output_gate`)
+- stores hashed output evidence in audit context (`response_hash`, `response_length`)
+
 ### Policy Decision Adapter (Decoupled Contract)
 
 Future-proof adapter layer for external context engines (LLM, vector DB, etc.) without coupling runtime execution:
@@ -172,6 +180,12 @@ Use custom constitution and audit file:
 aetherya decide "forbidden_token now" --constitution-path config/constitution.yaml --audit-path audit/decisions.jsonl --json
 ```
 
+Validate a candidate final response with OutputGate:
+
+```bash
+aetherya decide "help user" --candidate-response "you are an idiot" --json
+```
+
 Unified wrappers over existing module CLIs:
 
 ```bash
@@ -215,7 +229,7 @@ Decision endpoint:
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/decide \
   -H "Content-Type: application/json" \
-  -d '{"raw_input":"help user","actor":"robert","wait_shadow":true}'
+  -d '{"raw_input":"help user","actor":"robert","wait_shadow":true,"candidate_response":"Thank you for your question."}'
 ```
 
 Audit verification endpoint:

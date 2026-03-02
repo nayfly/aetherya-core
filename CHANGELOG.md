@@ -45,6 +45,12 @@ All notable changes to this project are documented in this file.
   - explicit `405 MethodNotAllowed` responses on POST-only routes when called via GET
   - `make api_serve` convenience target
   - end-to-end server tests + service-level contract tests
+- Added deterministic `OutputGate` for response safety:
+  - new `output_gate` module for toxic/insulting response detection
+  - optional `response_text` path in pipeline (`run_pipeline(..., response_text=...)`)
+  - `output_gate` signal integration in risk aggregation + audit context
+  - API/CLI support via optional `candidate_response`
+  - fail-closed stage for output validation errors (`fail_closed:output_gate`)
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.

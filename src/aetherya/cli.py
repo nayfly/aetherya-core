@@ -147,6 +147,11 @@ def _llm_shadow_disabled(cfg: PolicyConfig, *, wait_shadow: bool) -> PolicyConfi
 
 def _cmd_decide(args: argparse.Namespace) -> int:
     raw_input = _resolve_raw_input(args.raw_input, args.inline_input)
+    candidate_response = (
+        str(args.candidate_response).strip() if args.candidate_response is not None else None
+    )
+    if candidate_response == "":
+        candidate_response = None
     policy_path = Path(args.policy_path)
     cfg = load_policy_config(policy_path)
     cfg_effective = _llm_shadow_disabled(cfg, wait_shadow=bool(args.wait_shadow))
@@ -165,6 +170,7 @@ def _cmd_decide(args: argparse.Namespace) -> int:
         actor=str(args.actor),
         cfg=cfg_effective,
         audit=audit,
+        response_text=candidate_response,
     )
 
     event = _maybe_read_last_event(audit_path)
@@ -175,6 +181,7 @@ def _cmd_decide(args: argparse.Namespace) -> int:
             "policy_path": str(policy_path),
             "constitution_path": str(constitution_path) if constitution_path else None,
             "wait_shadow": bool(args.wait_shadow),
+            "candidate_response_present": candidate_response is not None,
             "llm_shadow_enabled_config": bool(cfg.llm_shadow.enabled),
             "llm_shadow_enabled_effective": bool(cfg_effective.llm_shadow.enabled),
             "audit_path": str(audit_path) if audit_path else None,
@@ -261,6 +268,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--audit-path",
         default=None,
         help="Optional audit JSONL path. If omitted, audit logging is disabled for this command.",
+    )
+    decide_parser.add_argument(
+        "--candidate-response",
+        default=None,
+        help="Optional final response text to validate with OutputGate.",
     )
     shadow_group = decide_parser.add_mutually_exclusive_group()
     shadow_group.add_argument(

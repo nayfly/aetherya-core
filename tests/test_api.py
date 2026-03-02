@@ -102,6 +102,24 @@ def test_api_decide_no_wait_shadow_disables_llm_shadow(tmp_path: Path) -> None:
     assert "llm_shadow" not in event["context"]
 
 
+def test_api_decide_candidate_response_triggers_output_gate(tmp_path: Path) -> None:
+    policy_path = _write_policy(tmp_path, lambda data: None)
+    audit_path = tmp_path / "decisions.jsonl"
+    api = AetheryaAPI(APISettings(policy_path=policy_path, audit_path=audit_path))
+
+    status, payload = api.decide(
+        {"raw_input": "help user", "candidate_response": "you are an idiot"}
+    )
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["decision"]["allowed"] is False
+    assert payload["decision"]["state"] == "hard_deny"
+    assert payload["meta"]["candidate_response_present"] is True
+
+    event = _read_last_event(audit_path)
+    assert event["context"]["output_gate"]["blocked"] is True
+
+
 def test_api_decide_validation_errors(tmp_path: Path) -> None:
     policy_path = _write_policy(tmp_path, lambda data: None)
     api = AetheryaAPI(APISettings(policy_path=policy_path, audit_path=tmp_path / "decisions.jsonl"))
@@ -124,6 +142,13 @@ def test_api_decide_validation_errors(tmp_path: Path) -> None:
     assert bad_wait_status == 400
     assert bad_wait_payload["ok"] is False
     assert "wait_shadow" in bad_wait_payload["error"]
+
+    bad_candidate_response_status, bad_candidate_response_payload = api.decide(
+        {"raw_input": "help", "candidate_response": 123}
+    )
+    assert bad_candidate_response_status == 400
+    assert bad_candidate_response_payload["ok"] is False
+    assert "candidate_response" in bad_candidate_response_payload["error"]
 
 
 def test_api_decide_internal_error_returns_500(

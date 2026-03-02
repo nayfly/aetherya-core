@@ -82,6 +82,54 @@ def test_cli_decide_no_wait_shadow_disables_llm_shadow(
     assert "llm_shadow" not in event["context"]
 
 
+def test_cli_decide_candidate_response_triggers_output_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit_path = tmp_path / "decisions.jsonl"
+    exit_code = cli.main(
+        [
+            "decide",
+            "help user",
+            "--candidate-response",
+            "you are an idiot",
+            "--audit-path",
+            str(audit_path),
+            "--json",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["decision"]["allowed"] is False
+    assert payload["decision"]["state"] == "hard_deny"
+    assert payload["meta"]["candidate_response_present"] is True
+
+    event = _read_last_event(audit_path)
+    assert event["context"]["output_gate"]["blocked"] is True
+
+
+def test_cli_decide_blank_candidate_response_is_ignored(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    audit_path = tmp_path / "decisions.jsonl"
+    exit_code = cli.main(
+        [
+            "decide",
+            "help user",
+            "--candidate-response",
+            "   ",
+            "--audit-path",
+            str(audit_path),
+            "--json",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["meta"]["candidate_response_present"] is False
+
+    event = _read_last_event(audit_path)
+    assert "output_gate" not in event["context"]
+
+
 def test_cli_decide_loads_constitution_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

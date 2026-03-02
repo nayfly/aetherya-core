@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import threading
 from typing import Any
 
@@ -23,6 +24,7 @@ from aetherya.explainability import ExplainabilityEngine
 from aetherya.jailbreak import JailbreakGuard
 from aetherya.llm_provider import DryRunLLMProvider, LLMMessage, LLMRequest, OpenAILLMProvider
 from aetherya.modes import Mode
+from aetherya.output_gate import OutputGate
 from aetherya.parser import parse_user_input
 from aetherya.policy_decision_adapter import (
     DryRunPolicyDecisionAdapter,
@@ -46,6 +48,10 @@ def _safe_float(value: Any, default: float = 1.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _sha256_text(value: str) -> str:
+    return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"
 
 
 def _default_execution_gate_config() -> ExecutionGateConfig:
@@ -272,6 +278,7 @@ def run_pipeline(
     actor: str,
     cfg: PolicyConfig,
     audit: AuditLogger | None = None,
+    response_text: str | None = None,
 ) -> Decision:
     # SAFE DEFAULT
     mode: Mode = Mode.CONSULTIVE
@@ -475,6 +482,44 @@ def run_pipeline(
             actor=actor,
             mode=mode,
             stage="constitution",
+            exc=exc,
+            audit=audit,
+            policy_fingerprint=policy_fingerprint,
+        )
+
+    output_gate: dict[str, Any] | None = None
+    # 6.5) Output Gate (fail-closed si peta, sólo cuando hay respuesta candidata)
+    try:
+        if response_text is not None:
+            verdict = OutputGate().evaluate(response_text)
+            if verdict:
+                output_gate = {
+                    "enabled": True,
+                    "blocked": verdict.blocked,
+                    "reason": verdict.reason,
+                    "risk_score": verdict.risk_score,
+                    "confidence": verdict.confidence,
+                    "tags": list(verdict.tags),
+                    "matched_terms": list(verdict.matched_terms),
+                    "response_hash": _sha256_text(response_text),
+                    "response_length": len(response_text),
+                }
+                signals.append(
+                    RiskSignal(
+                        source="output_gate",
+                        score=verdict.risk_score,
+                        confidence=verdict.confidence,
+                        reason=verdict.reason,
+                        tags=list(verdict.tags),
+                        violated_principle=verdict.violated_principle,
+                    )
+                )
+    except Exception as exc:
+        return _fail_closed(
+            raw_input=raw_input,
+            actor=actor,
+            mode=mode,
+            stage="output_gate",
             exc=exc,
             audit=audit,
             policy_fingerprint=policy_fingerprint,
@@ -766,6 +811,8 @@ def run_pipeline(
             }
             if explainability:
                 context["explainability"] = explainability
+            if output_gate:
+                context["output_gate"] = output_gate
             if llm_shadow:
                 context["llm_shadow"] = llm_shadow
             if policy_adapter_shadow:

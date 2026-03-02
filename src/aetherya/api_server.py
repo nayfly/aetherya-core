@@ -184,6 +184,8 @@ def _dashboard_html() -> str:
         <textarea id="decide-raw">help user safely</textarea>
         <label for="decide-actor">actor</label>
         <input id="decide-actor" type="text" value="robert">
+        <label for="decide-response">candidate_response (optional)</label>
+        <textarea id="decide-response" placeholder="Generated user-facing answer to validate with OutputGate"></textarea>
         <div class="row">
           <label class="check"><input id="decide-wait-shadow" type="checkbox" checked>wait_shadow</label>
           <button id="btn-decide" type="button">POST /v1/decide</button>
@@ -245,10 +247,17 @@ def _dashboard_html() -> str:
     });
 
     document.getElementById("btn-decide").addEventListener("click", () => {
-      request("decide-status", "/v1/decide", {
+      const candidateResponse = document.getElementById("decide-response").value.trim();
+      const payload = {
         raw_input: document.getElementById("decide-raw").value,
         actor: document.getElementById("decide-actor").value,
         wait_shadow: document.getElementById("decide-wait-shadow").checked,
+      };
+      if (candidateResponse) {
+        payload.candidate_response = candidateResponse;
+      }
+      request("decide-status", "/v1/decide", {
+        ...payload,
       });
     });
 

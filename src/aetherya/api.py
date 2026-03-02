@@ -119,6 +119,10 @@ class AetheryaAPI:
                 field_name="wait_shadow",
                 default=True,
             )
+            candidate_response = _as_optional_str(
+                body.get("candidate_response"),
+                field_name="candidate_response",
+            )
 
             cfg = load_policy_config(self.settings.policy_path)
             cfg_effective = _llm_shadow_disabled(cfg, wait_shadow=wait_shadow)
@@ -132,6 +136,7 @@ class AetheryaAPI:
                 actor=actor,
                 cfg=cfg_effective,
                 audit=audit,
+                response_text=candidate_response,
             )
 
             event = _maybe_read_last_event(audit_path) if audit_path is not None else None
@@ -153,6 +158,7 @@ class AetheryaAPI:
                         "policy_fingerprint": cfg.policy_fingerprint,
                         "llm_shadow_enabled_config": bool(cfg.llm_shadow.enabled),
                         "llm_shadow_enabled_effective": bool(cfg_effective.llm_shadow.enabled),
+                        "candidate_response_present": candidate_response is not None,
                         "event_id": event.get("event_id") if isinstance(event, dict) else None,
                         "decision_id": (
                             event.get("decision_id") if isinstance(event, dict) else None

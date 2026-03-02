@@ -77,6 +77,7 @@ def test_dashboard_template_contains_controls() -> None:
     assert "AETHERYA API Dashboard" in html
     assert "/v1/decide" in html
     assert "/v1/audit/verify" in html
+    assert "candidate_response" in html
 
 
 def test_handler_parse_json_body_branches() -> None:
