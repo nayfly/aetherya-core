@@ -528,30 +528,28 @@ def test_confirmation_signed_proof_param_conflict_and_empty_key_env_raise(tmp_pa
     with pytest.raises(ValueError):
         load_policy_config(path)
 
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["proof_param"] = "confirm_proof"
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["key_env"] = ""
+    signed_proof = cfg_data["confirmation"]["evidence"]["signed_proof"]
+
+    signed_proof["proof_param"] = "confirm_proof"
+    signed_proof["key_env"] = ""
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError):
         load_policy_config(path)
 
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["key_env"] = (
-        "AETHERYA_CONFIRMATION_HMAC_KEY"
-    )
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["keyring_env"] = ""
+    signed_proof["key_env"] = "AETHERYA_CONFIRMATION_HMAC_KEY"
+    signed_proof["keyring_env"] = ""
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError):
         load_policy_config(path)
 
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["keyring_env"] = (
-        "AETHERYA_CONFIRMATION_HMAC_KEYRING"
-    )
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["active_kid"] = ""
+    signed_proof["keyring_env"] = "AETHERYA_CONFIRMATION_HMAC_KEYRING"
+    signed_proof["active_kid"] = ""
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError):
         load_policy_config(path)
 
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["active_kid"] = "k1"
-    cfg_data["confirmation"]["evidence"]["signed_proof"]["replay_mode"] = "invalid"
+    signed_proof["active_kid"] = "k1"
+    signed_proof["replay_mode"] = "invalid"
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError):
         load_policy_config(path)
