@@ -48,7 +48,7 @@ skip_covered = true
 dev = [
   "pytest",
   "pytest-cov",
-  "ruff",
+  "ruff==0.15.2",
   "black",
   "mypy",
   "pyyaml",
