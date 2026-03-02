@@ -102,6 +102,12 @@ confirmation:
     context_param: confirm_context
     token_pattern: "^ack:[a-z0-9_-]{8,}$"
     min_context_length: 12
+    signed_proof:
+      enabled: false
+      proof_param: confirm_proof
+      key_env: AETHERYA_CONFIRMATION_HMAC_KEY
+      max_valid_for_sec: 900
+      clock_skew_sec: 5
 
 llm_shadow:
   enabled: false

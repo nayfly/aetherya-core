@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from aetherya.actions import validate_action_request, validate_actor
+from aetherya.approval_proof import approval_scope_hash, build_approval_proof
 from aetherya.audit import AuditLogger
 from aetherya.audit_verify import main as audit_verify_main
 from aetherya.chaos_benchmark import main as chaos_benchmark_main
@@ -16,6 +19,7 @@ from aetherya.config import LLMShadowConfig, PolicyConfig, load_policy_config
 from aetherya.constitution import Constitution, Principle
 from aetherya.explainability_render import main as explainability_render_main
 from aetherya.explainability_report import main as explainability_report_main
+from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
 from aetherya.pipeline_benchmark import main as pipeline_benchmark_main
 from aetherya.security_baseline import main as security_baseline_main
@@ -221,6 +225,85 @@ def _cmd_decide(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_confirmation_sign(args: argparse.Namespace) -> int:
+    raw_input = _resolve_raw_input(args.raw_input, args.inline_input)
+    actor = validate_actor(str(args.actor))
+    policy_path = Path(args.policy_path)
+    cfg = load_policy_config(policy_path)
+    signed_cfg = cfg.confirmation.evidence.signed_proof
+
+    if not signed_cfg.enabled:
+        raise ValueError("confirmation.evidence.signed_proof.enabled=false in current policy")
+
+    key_env = str(args.key_env).strip() if args.key_env is not None else signed_cfg.key_env
+    if not key_env:
+        raise ValueError("key_env must be non-empty")
+    secret = os.getenv(key_env, "").strip()
+    if not secret:
+        raise ValueError(f"missing approval key in env var: {key_env}")
+
+    expires_in_sec = (
+        int(args.expires_in_sec)
+        if args.expires_in_sec is not None
+        else signed_cfg.max_valid_for_sec
+    )
+    if expires_in_sec <= 0:
+        raise ValueError("expires_in_sec must be > 0")
+    if expires_in_sec > signed_cfg.max_valid_for_sec:
+        raise ValueError(
+            f"expires_in_sec exceeds policy max_valid_for_sec ({signed_cfg.max_valid_for_sec})"
+        )
+
+    action = validate_action_request(parse_user_input(raw_input))
+    if action.intent != "operate":
+        raise ValueError("confirmation sign requires an operative action input")
+
+    exclude_keys = {name for name in action.parameters if str(name).startswith("confirm_")}
+    proof, expires_at = build_approval_proof(
+        secret=secret,
+        actor=actor,
+        action=action,
+        ttl_sec=expires_in_sec,
+        now_ts=args.now_ts,
+        exclude_params=exclude_keys,
+    )
+    scope_hash = approval_scope_hash(actor=actor, action=action, exclude_params=exclude_keys)
+
+    payload = {
+        "ok": True,
+        "approval_proof": proof,
+        "expires_at": int(expires_at),
+        "expires_in_sec": int(expires_in_sec),
+        "scope_hash": scope_hash,
+        "actor": actor,
+        "tool": action.tool,
+        "target": action.target,
+        "operation": action.parameters.get("operation"),
+        "policy_path": str(policy_path),
+        "key_env": key_env,
+    }
+
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            "approval_proof={proof} expires_at={expires_at} scope_hash={scope_hash}".format(
+                proof=payload["approval_proof"],
+                expires_at=payload["expires_at"],
+                scope_hash=payload["scope_hash"],
+            )
+        )
+        print(
+            "actor={actor} tool={tool} operation={operation} key_env={key_env}".format(
+                actor=payload["actor"],
+                tool=payload["tool"],
+                operation=payload["operation"],
+                key_env=payload["key_env"],
+            )
+        )
+    return 0
+
+
 def _cmd_forward(args: argparse.Namespace) -> int:
     target_main = getattr(args, "target_main", None)
     forward_args = list(getattr(args, "forward_args", []))
@@ -290,6 +373,48 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     decide_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     decide_parser.set_defaults(handler=_cmd_decide)
+
+    confirmation_parser = subparsers.add_parser("confirmation", help="Strong confirmation tooling.")
+    confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command")
+    confirmation_subparsers.required = True
+
+    confirmation_sign_parser = confirmation_subparsers.add_parser(
+        "sign",
+        help="Generate out-of-band approval proof for one operative action.",
+    )
+    confirmation_sign_parser.add_argument(
+        "raw_input",
+        nargs="?",
+        help="Raw operative input to bind in approval proof scope.",
+    )
+    confirmation_sign_parser.add_argument("--input", dest="inline_input", help="Raw input string.")
+    confirmation_sign_parser.add_argument("--actor", default="robert", help="Actor identity.")
+    confirmation_sign_parser.add_argument(
+        "--policy-path", default="config/policy.yaml", help="Policy YAML path."
+    )
+    confirmation_sign_parser.add_argument(
+        "--key-env",
+        default=None,
+        help="Override env var name for HMAC key (defaults to policy signed_proof.key_env).",
+    )
+    confirmation_sign_parser.add_argument(
+        "--expires-in-sec",
+        type=int,
+        default=None,
+        help="Proof TTL in seconds (must be <= policy max_valid_for_sec).",
+    )
+    confirmation_sign_parser.add_argument(
+        "--now-ts",
+        type=int,
+        default=None,
+        help="Optional unix timestamp override for deterministic tests.",
+    )
+    confirmation_sign_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON.",
+    )
+    confirmation_sign_parser.set_defaults(handler=_cmd_confirmation_sign)
 
     audit_parser = subparsers.add_parser("audit", help="Audit tooling.")
     audit_subparsers = audit_parser.add_subparsers(dest="audit_command")

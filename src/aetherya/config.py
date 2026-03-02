@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -72,11 +72,23 @@ class ConfirmationRequireConfig:
 
 
 @dataclass(frozen=True)
+class ConfirmationSignedProofConfig:
+    enabled: bool = False
+    proof_param: str = "confirm_proof"
+    key_env: str = "AETHERYA_CONFIRMATION_HMAC_KEY"
+    max_valid_for_sec: int = 900
+    clock_skew_sec: int = 5
+
+
+@dataclass(frozen=True)
 class ConfirmationEvidenceConfig:
     token_param: str
     context_param: str
     token_pattern: str
     min_context_length: int
+    signed_proof: ConfirmationSignedProofConfig = field(
+        default_factory=ConfirmationSignedProofConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -216,6 +228,7 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
 
     require_raw = dict(data.get("require_for", {}))
     evidence_raw = dict(data.get("evidence", {}))
+    signed_proof_raw = dict(evidence_raw.get("signed_proof", {}))
 
     min_risk_score = int(require_raw.get("min_risk_score", 0))
     if min_risk_score < 0:
@@ -251,11 +264,38 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
     if min_context_length < 0:
         raise ValueError("confirmation.evidence.min_context_length must be >= 0")
 
+    proof_param = str(signed_proof_raw.get("proof_param", "confirm_proof")).strip()
+    key_env = str(signed_proof_raw.get("key_env", "AETHERYA_CONFIRMATION_HMAC_KEY")).strip()
+    max_valid_for_sec = int(signed_proof_raw.get("max_valid_for_sec", 900))
+    clock_skew_sec = int(signed_proof_raw.get("clock_skew_sec", 5))
+
+    if not proof_param:
+        raise ValueError("confirmation.evidence.signed_proof.proof_param must be non-empty")
+    if proof_param in {token_param, context_param}:
+        raise ValueError(
+            "confirmation signed_proof proof_param must be distinct from token/context"
+        )
+    if not key_env:
+        raise ValueError("confirmation.evidence.signed_proof.key_env must be non-empty")
+    if max_valid_for_sec <= 0:
+        raise ValueError("confirmation.evidence.signed_proof.max_valid_for_sec must be > 0")
+    if clock_skew_sec < 0:
+        raise ValueError("confirmation.evidence.signed_proof.clock_skew_sec must be >= 0")
+
+    signed_proof = ConfirmationSignedProofConfig(
+        enabled=bool(signed_proof_raw.get("enabled", False)),
+        proof_param=proof_param,
+        key_env=key_env,
+        max_valid_for_sec=max_valid_for_sec,
+        clock_skew_sec=clock_skew_sec,
+    )
+
     evidence = ConfirmationEvidenceConfig(
         token_param=token_param,
         context_param=context_param,
         token_pattern=str(evidence_raw.get("token_pattern", r"^ack:[a-z0-9_-]{8,}$")).strip(),
         min_context_length=min_context_length,
+        signed_proof=signed_proof,
     )
 
     return ConfirmationConfig(

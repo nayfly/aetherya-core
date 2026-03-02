@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import TypedDict
 
 from aetherya.actions import ActionRequest
+from aetherya.approval_proof import ApprovalProofError, verify_approval_proof
 from aetherya.config import ConfirmationConfig
 from aetherya.risk import RiskAggregate, RiskDecision
 
@@ -14,6 +16,10 @@ class ConfirmationOutcome(TypedDict, total=False):
     reason: str
     tags: list[str]
     override_decision: str
+    proof_required: bool
+    proof_valid: bool
+    proof_expires_at: int
+    proof_scope_hash: str
 
 
 class ConfirmationGate:
@@ -43,7 +49,7 @@ class ConfirmationGate:
         return re.fullmatch(self.cfg.evidence.token_pattern, token) is not None
 
     def evaluate(
-        self, *, action: ActionRequest, aggregate: RiskAggregate
+        self, *, action: ActionRequest, aggregate: RiskAggregate, actor: str = "unknown"
     ) -> ConfirmationOutcome | None:
         if not self.cfg.enabled:
             return None
@@ -87,12 +93,76 @@ class ConfirmationGate:
                 "tags": ["confirmation_required", "confirmation_context_too_short"],
             }
 
+        signed_proof_cfg = self.cfg.evidence.signed_proof
+        proof_expires_at: int | None = None
+        proof_scope_hash: str | None = None
+        proof_tags: list[str] = []
+        if signed_proof_cfg.enabled:
+            proof_key = signed_proof_cfg.proof_param
+            proof_raw = action.parameters.get(proof_key)
+            if proof_raw is None or not str(proof_raw).strip():
+                return {
+                    "required": True,
+                    "confirmed": False,
+                    "reason": "out-of-band approval proof is missing",
+                    "tags": ["confirmation_required", "confirmation_proof_missing"],
+                    "proof_required": True,
+                    "proof_valid": False,
+                }
+
+            verifier_secret = os.getenv(signed_proof_cfg.key_env, "").strip()
+            if not verifier_secret:
+                return {
+                    "required": True,
+                    "confirmed": False,
+                    "reason": "approval verifier key is not configured",
+                    "tags": ["confirmation_required", "confirmation_proof_key_missing"],
+                    "proof_required": True,
+                    "proof_valid": False,
+                }
+
+            exclude_keys = {name for name in action.parameters if str(name).startswith("confirm_")}
+            try:
+                verification = verify_approval_proof(
+                    secret=verifier_secret,
+                    proof=str(proof_raw),
+                    actor=str(actor),
+                    action=action,
+                    clock_skew_sec=signed_proof_cfg.clock_skew_sec,
+                    max_valid_for_sec=signed_proof_cfg.max_valid_for_sec,
+                    exclude_params=exclude_keys,
+                )
+            except ApprovalProofError as exc:
+                return {
+                    "required": True,
+                    "confirmed": False,
+                    "reason": f"out-of-band approval proof is invalid ({exc.code})",
+                    "tags": [
+                        "confirmation_required",
+                        "confirmation_proof_invalid",
+                        f"confirmation_proof_{exc.code}",
+                    ],
+                    "proof_required": True,
+                    "proof_valid": False,
+                }
+
+            proof_expires_at = verification.expires_at
+            proof_scope_hash = verification.scope_hash
+            proof_tags.append("confirmation_proof_validated")
+
         outcome: ConfirmationOutcome = {
             "required": True,
             "confirmed": True,
             "reason": "strong confirmation validated",
-            "tags": ["confirmation_validated"],
+            "tags": ["confirmation_validated", *proof_tags],
         }
+        if signed_proof_cfg.enabled:
+            outcome["proof_required"] = True
+            outcome["proof_valid"] = True
+        if proof_expires_at is not None:
+            outcome["proof_expires_at"] = int(proof_expires_at)
+        if proof_scope_hash is not None:
+            outcome["proof_scope_hash"] = str(proof_scope_hash)
 
         if aggregate.decision == RiskDecision.REQUIRE_CONFIRM:
             outcome["override_decision"] = self.cfg.on_confirmed

@@ -549,7 +549,9 @@ def run_pipeline(
 
     try:
         confirmation = ConfirmationGate(_confirmation_cfg(cfg)).evaluate(
-            action=action, aggregate=agg
+            action=action,
+            aggregate=agg,
+            actor=actor,
         )
         if confirmation:
             confirmed = bool(confirmation.get("confirmed", False))

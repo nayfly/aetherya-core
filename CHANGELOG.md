@@ -51,6 +51,12 @@ All notable changes to this project are documented in this file.
   - `output_gate` signal integration in risk aggregation + audit context
   - API/CLI support via optional `candidate_response`
   - fail-closed stage for output validation errors (`fail_closed:output_gate`)
+- Added out-of-band confirmation proof support for sensitive operations:
+  - deterministic HMAC proof format (`ap1.<expires_at>.<nonce>.<signature>`)
+  - action-bound scope hashing (`actor` + tool/operation/target/params)
+  - policy-configurable proof verification window and clock skew guards
+  - optional `signed_proof` confirmation policy block (`enabled`, `proof_param`, `key_env`)
+  - new CLI command: `aetherya confirmation sign` to mint proofs for interactive/ops workflows
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.

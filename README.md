@@ -62,7 +62,7 @@ Deterministic runtime order:
 - Parse + ABI contracts (`actor`, `action`)
 - Guard chain (`execution_gate` -> `capability_gate` -> `jailbreak_guard` -> `procedural_guard`)
 - Constitution signal evaluation
-- Risk aggregation + optional strong confirmation
+- Risk aggregation + optional strong confirmation (token/context and optional signed out-of-band proof)
 - Policy state mapping and decision contract
 - Explainability + shadow telemetry (`llm_shadow`, `policy_adapter_shadow`)
 - Audit logging (`decision_id`, `context_hash`, chain/hash attestation)
@@ -184,6 +184,23 @@ Validate a candidate final response with OutputGate:
 
 ```bash
 aetherya decide "help user" --candidate-response "you are an idiot" --json
+```
+
+Generate and use an out-of-band signed confirmation proof (HMAC + expiry):
+
+```bash
+export AETHERYA_CONFIRMATION_HMAC_KEY="replace-with-long-random-secret"
+
+aetherya confirmation sign \
+  "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator" \
+  --actor robert \
+  --expires-in-sec 60 \
+  --json
+
+# then include the emitted approval_proof in the decision input:
+aetherya decide \
+  "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator param.confirm_proof=<approval_proof>" \
+  --json
 ```
 
 Unified wrappers over existing module CLIs:

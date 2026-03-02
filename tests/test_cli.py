@@ -130,6 +130,284 @@ def test_cli_decide_blank_candidate_response_is_ignored(
     assert "output_gate" not in event["context"]
 
 
+def test_cli_confirmation_sign_json_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {
+                "enabled": True,
+                "key_env": "AETHERYA_TEST_SIGN_KEY",
+                "max_valid_for_sec": 300,
+            }
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_KEY", "cli-sign-key")
+
+    exit_code = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--actor",
+            "robert",
+            "--policy-path",
+            str(policy_path),
+            "--expires-in-sec",
+            "60",
+            "--now-ts",
+            "1700000000",
+            "--json",
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["ok"] is True
+    assert payload["approval_proof"].startswith("ap1.")
+    assert payload["expires_at"] == 1_700_000_060
+    assert payload["scope_hash"].startswith("sha256:")
+
+
+def test_cli_confirmation_sign_rejects_disabled_policy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    exit_code = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--policy-path",
+            "config/policy.yaml",
+            "--json",
+        ]
+    )
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload["ok"] is False
+    assert "signed_proof.enabled=false" in payload["error"]
+
+
+def test_cli_confirmation_sign_and_decide_flow(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {
+                "enabled": True,
+                "key_env": "AETHERYA_TEST_SIGN_KEY",
+                "max_valid_for_sec": 300,
+                "clock_skew_sec": 2,
+            }
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_KEY", "cli-sign-key")
+    audit_path = tmp_path / "decisions.jsonl"
+
+    base_input = (
+        "mode:operative tool:filesystem target:/tmp param.path=/tmp/a "
+        "param.operation=write param.confirm_token=ack:abc12345 "
+        "param.confirm_context=approved_for_sensitive_action"
+    )
+    sign_exit = cli.main(
+        [
+            "confirmation",
+            "sign",
+            base_input,
+            "--actor",
+            "robert",
+            "--policy-path",
+            str(policy_path),
+            "--expires-in-sec",
+            "60",
+            "--json",
+        ]
+    )
+    assert sign_exit == 0
+    sign_payload = json.loads(capsys.readouterr().out.strip())
+    approval_proof = sign_payload["approval_proof"]
+
+    decide_exit = cli.main(
+        [
+            "decide",
+            f"{base_input} param.confirm_proof={approval_proof}",
+            "--actor",
+            "robert",
+            "--policy-path",
+            str(policy_path),
+            "--audit-path",
+            str(audit_path),
+            "--json",
+        ]
+    )
+    assert decide_exit == 0
+    decide_payload = json.loads(capsys.readouterr().out.strip())
+    assert decide_payload["decision"]["allowed"] is True
+    assert decide_payload["decision"]["state"] == "allow"
+
+
+def test_cli_confirmation_sign_rejects_empty_key_env_override(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update({"enabled": True}),
+    )
+    exit_code = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--policy-path",
+            str(policy_path),
+            "--key-env",
+            "   ",
+            "--json",
+        ]
+    )
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "key_env must be non-empty" in payload["error"]
+
+
+def test_cli_confirmation_sign_rejects_missing_env_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {
+                "enabled": True,
+                "key_env": "AETHERYA_TEST_MISSING_SIGN_KEY",
+            }
+        ),
+    )
+    monkeypatch.delenv("AETHERYA_TEST_MISSING_SIGN_KEY", raising=False)
+    exit_code = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--policy-path",
+            str(policy_path),
+            "--json",
+        ]
+    )
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "missing approval key in env var" in payload["error"]
+
+
+def test_cli_confirmation_sign_rejects_invalid_expiry_values(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_EXP_SIGN_KEY", "max_valid_for_sec": 30}
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_EXP_SIGN_KEY", "cli-sign-key")
+
+    exit_a = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--policy-path",
+            str(policy_path),
+            "--expires-in-sec",
+            "0",
+            "--json",
+        ]
+    )
+    assert exit_a == 1
+    payload_a = json.loads(capsys.readouterr().err.strip())
+    assert "expires_in_sec must be > 0" in payload_a["error"]
+
+    exit_b = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--policy-path",
+            str(policy_path),
+            "--expires-in-sec",
+            "60",
+            "--json",
+        ]
+    )
+    assert exit_b == 1
+    payload_b = json.loads(capsys.readouterr().err.strip())
+    assert "exceeds policy max_valid_for_sec (30)" in payload_b["error"]
+
+
+def test_cli_confirmation_sign_requires_operative_input(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_MODE_SIGN_KEY"}
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_MODE_SIGN_KEY", "cli-sign-key")
+    exit_code = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "help user",
+            "--policy-path",
+            str(policy_path),
+            "--json",
+        ]
+    )
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert "requires an operative action input" in payload["error"]
+
+
+def test_cli_confirmation_sign_text_output_branch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_TEXT_SIGN_KEY", "max_valid_for_sec": 300}
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_TEXT_SIGN_KEY", "cli-sign-key")
+    exit_code = cli.main(
+        [
+            "confirmation",
+            "sign",
+            "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "--policy-path",
+            str(policy_path),
+            "--expires-in-sec",
+            "60",
+        ]
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "approval_proof=ap1." in out
+    assert "scope_hash=sha256:" in out
+
+
 def test_cli_decide_loads_constitution_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
