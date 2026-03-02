@@ -7,6 +7,8 @@ from aetherya.approval_proof import (
     ApprovalProofError,
     approval_scope_hash,
     build_approval_proof,
+    load_approval_keyring,
+    parse_approval_keyring,
     verify_approval_proof,
 )
 
@@ -32,6 +34,7 @@ def test_approval_proof_roundtrip_ok() -> None:
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="top-secret",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=60,
@@ -41,7 +44,7 @@ def test_approval_proof_roundtrip_ok() -> None:
     )
 
     verification = verify_approval_proof(
-        secret="top-secret",
+        keyring={"k1": "top-secret"},
         proof=proof,
         actor="robert",
         action=action,
@@ -50,6 +53,7 @@ def test_approval_proof_roundtrip_ok() -> None:
         exclude_params=excluded,
     )
     assert verification.proof_version == "ap1"
+    assert verification.kid == "k1"
     assert verification.nonce == "seed001"
     assert verification.scope_hash.startswith("sha256:")
 
@@ -59,6 +63,7 @@ def test_approval_proof_rejects_signature_mismatch() -> None:
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="top-secret",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=60,
@@ -70,7 +75,7 @@ def test_approval_proof_rejects_signature_mismatch() -> None:
 
     with pytest.raises(ApprovalProofError) as exc_info:
         verify_approval_proof(
-            secret="top-secret",
+            keyring={"k1": "top-secret"},
             proof=bad_proof,
             actor="robert",
             action=action,
@@ -85,6 +90,7 @@ def test_approval_proof_rejects_expired() -> None:
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="top-secret",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=10,
@@ -94,7 +100,7 @@ def test_approval_proof_rejects_expired() -> None:
     )
     with pytest.raises(ApprovalProofError) as exc_info:
         verify_approval_proof(
-            secret="top-secret",
+            keyring={"k1": "top-secret"},
             proof=proof,
             actor="robert",
             action=action,
@@ -109,6 +115,7 @@ def test_approval_proof_rejects_future_window_too_large() -> None:
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="top-secret",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=1200,
@@ -118,7 +125,7 @@ def test_approval_proof_rejects_future_window_too_large() -> None:
     )
     with pytest.raises(ApprovalProofError) as exc_info:
         verify_approval_proof(
-            secret="top-secret",
+            keyring={"k1": "top-secret"},
             proof=proof,
             actor="robert",
             action=action,
@@ -175,6 +182,7 @@ def test_build_approval_proof_rejects_invalid_inputs() -> None:
     with pytest.raises(ValueError, match="ttl_sec must be > 0"):
         build_approval_proof(
             secret="top-secret",
+            kid="k1",
             actor="robert",
             action=action,
             ttl_sec=0,
@@ -182,6 +190,23 @@ def test_build_approval_proof_rejects_invalid_inputs() -> None:
     with pytest.raises(ValueError, match="secret must be non-empty"):
         build_approval_proof(
             secret="   ",
+            kid="k1",
+            actor="robert",
+            action=action,
+            ttl_sec=10,
+        )
+    with pytest.raises(ValueError, match="kid must be non-empty"):
+        build_approval_proof(
+            secret="top-secret",
+            kid="",
+            actor="robert",
+            action=action,
+            ttl_sec=10,
+        )
+    with pytest.raises(ValueError, match="kid must not contain"):
+        build_approval_proof(
+            secret="top-secret",
+            kid="k.1",
             actor="robert",
             action=action,
             ttl_sec=10,
@@ -192,18 +217,20 @@ def test_build_approval_proof_rejects_invalid_inputs() -> None:
     ("proof", "expected_code"),
     [
         ("ap1.1.a", "bad_format"),
-        ("ap2.1.nonce." + ("a" * 64), "bad_version"),
-        ("ap1.xyz.nonce." + ("a" * 64), "bad_expiry"),
-        ("ap1.0.nonce." + ("a" * 64), "bad_expiry"),
-        ("ap1.1.." + ("a" * 64), "bad_nonce"),
-        ("ap1.1.nonce.deadbeef", "bad_signature"),
+        ("ap2.k1.1.nonce.sha256:abc." + ("a" * 64), "bad_version"),
+        ("ap1..1.nonce.sha256:abc." + ("a" * 64), "bad_kid"),
+        ("ap1.k1.xyz.nonce.sha256:abc." + ("a" * 64), "bad_expiry"),
+        ("ap1.k1.0.nonce.sha256:abc." + ("a" * 64), "bad_expiry"),
+        ("ap1.k1.1..sha256:abc." + ("a" * 64), "bad_nonce"),
+        ("ap1.k1.1.nonce.nohash.deadbeef", "bad_scope_hash"),
+        ("ap1.k1.1.nonce.sha256:abc.deadbeef", "bad_signature"),
     ],
 )
 def test_verify_approval_proof_rejects_bad_formats(proof: str, expected_code: str) -> None:
     action = _make_action()
     with pytest.raises(ApprovalProofError) as exc_info:
         verify_approval_proof(
-            secret="top-secret",
+            keyring={"k1": "top-secret"},
             proof=proof,
             actor="robert",
             action=action,
@@ -217,7 +244,7 @@ def test_verify_approval_proof_rejects_invalid_runtime_windows() -> None:
     with pytest.raises(ApprovalProofError) as missing_secret:
         verify_approval_proof(
             secret="   ",
-            proof="ap1.1.nonce." + ("a" * 64),
+            proof="ap1.k1.1.nonce.sha256:abc." + ("a" * 64),
             actor="robert",
             action=action,
             now_ts=1,
@@ -237,7 +264,7 @@ def test_verify_approval_proof_rejects_invalid_runtime_windows() -> None:
     with pytest.raises(ApprovalProofError) as invalid_window_a:
         verify_approval_proof(
             secret="top-secret",
-            proof="ap1.1.nonce." + ("a" * 64),
+            proof="ap1.k1.1.nonce.sha256:abc." + ("a" * 64),
             actor="robert",
             action=action,
             now_ts=1,
@@ -248,10 +275,102 @@ def test_verify_approval_proof_rejects_invalid_runtime_windows() -> None:
     with pytest.raises(ApprovalProofError) as invalid_window_b:
         verify_approval_proof(
             secret="top-secret",
-            proof="ap1.1.nonce." + ("a" * 64),
+            proof="ap1.k1.1.nonce.sha256:abc." + ("a" * 64),
             actor="robert",
             action=action,
             now_ts=1,
             clock_skew_sec=-1,
         )
     assert invalid_window_b.value.code == "invalid_window"
+
+
+def test_verify_approval_proof_unknown_kid_and_scope_mismatch() -> None:
+    action = _make_action()
+    excluded = {name for name in action.parameters if name.startswith("confirm_")}
+    proof, _ = build_approval_proof(
+        secret="top-secret",
+        kid="k1",
+        actor="robert",
+        action=action,
+        ttl_sec=60,
+        now_ts=1_700_000_000,
+        nonce="seed001",
+        exclude_params=excluded,
+    )
+
+    with pytest.raises(ApprovalProofError) as unknown_kid:
+        verify_approval_proof(
+            keyring={"k2": "top-secret"},
+            proof=proof,
+            actor="robert",
+            action=action,
+            now_ts=1_700_000_010,
+            exclude_params=excluded,
+        )
+    assert unknown_kid.value.code == "unknown_kid"
+
+    with pytest.raises(ApprovalProofError) as scope_mismatch:
+        verify_approval_proof(
+            keyring={"k1": "top-secret"},
+            proof=proof,
+            actor="alice",
+            action=action,
+            now_ts=1_700_000_010,
+            exclude_params=excluded,
+        )
+    assert scope_mismatch.value.code == "scope_mismatch"
+
+
+def test_parse_and_load_keyring_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert parse_approval_keyring("") == {}
+    assert parse_approval_keyring('{"k1":"s1","k2":"s2"}') == {"k1": "s1", "k2": "s2"}
+    assert parse_approval_keyring("k1=s1,k2=s2") == {"k1": "s1", "k2": "s2"}
+    assert parse_approval_keyring("k1=s1;k2=s2") == {"k1": "s1", "k2": "s2"}
+    assert parse_approval_keyring('{"":"x","k1":"","k2":"s2"}') == {"k2": "s2"}
+    assert parse_approval_keyring("k1=s1,,k2=s2") == {"k1": "s1", "k2": "s2"}
+
+    with pytest.raises(ValueError, match="invalid keyring segment"):
+        parse_approval_keyring("k1")
+    with pytest.raises(ValueError, match="invalid keyring segment"):
+        parse_approval_keyring("k1=")
+
+    monkeypatch.setenv("KR", '{"k3":"s3"}')
+    monkeypatch.setenv("KF", "fallback")
+    assert load_approval_keyring(keyring_env="KR", fallback_env="KF", fallback_kid="k1") == {
+        "k3": "s3"
+    }
+
+    monkeypatch.setenv("KR", "")
+    assert load_approval_keyring(keyring_env="KR", fallback_env="KF", fallback_kid="k1") == {
+        "k1": "fallback"
+    }
+    monkeypatch.setenv("KR", "{}")
+    assert load_approval_keyring(keyring_env="KR", fallback_env="KF", fallback_kid="k1") == {
+        "k1": "fallback"
+    }
+
+
+def test_verify_approval_proof_secret_mode_roundtrip() -> None:
+    action = _make_action()
+    excluded = {name for name in action.parameters if name.startswith("confirm_")}
+    proof, _ = build_approval_proof(
+        secret="top-secret",
+        kid="k1",
+        actor="robert",
+        action=action,
+        ttl_sec=60,
+        now_ts=1_700_000_000,
+        nonce="seed001",
+        exclude_params=excluded,
+    )
+    verification = verify_approval_proof(
+        secret="top-secret",
+        proof=proof,
+        actor="robert",
+        action=action,
+        now_ts=1_700_000_010,
+        exclude_params=excluded,
+    )
+    assert verification.kid == "k1"

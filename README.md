@@ -203,6 +203,11 @@ aetherya decide \
   --json
 ```
 
+Key rotation and replay controls are policy-driven via `confirmation.evidence.signed_proof`:
+- `active_kid` (current signing key id)
+- `keyring_env` (kid->secret keyring)
+- `replay_mode` (`single_use` / `idempotent`)
+
 Unified wrappers over existing module CLIs:
 
 ```bash
@@ -249,6 +254,25 @@ curl -s -X POST http://127.0.0.1:8080/v1/decide \
   -d '{"raw_input":"help user","actor":"robert","wait_shadow":true,"candidate_response":"Thank you for your question."}'
 ```
 
+Admin-only confirmation signing endpoint (localhost + admin key header):
+
+```bash
+export AETHERYA_APPROVALS_API_KEY="replace-with-admin-key"
+curl -s -X POST http://127.0.0.1:8080/v1/confirmation/sign \
+  -H "Content-Type: application/json" \
+  -H "X-AETHERYA-Admin-Key: ${AETHERYA_APPROVALS_API_KEY}" \
+  -d '{"raw_input":"mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator","actor":"robert","expires_in_sec":60}'
+```
+
+Admin-only proof verification endpoint:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/confirmation/verify \
+  -H "Content-Type: application/json" \
+  -H "X-AETHERYA-Admin-Key: ${AETHERYA_APPROVALS_API_KEY}" \
+  -d '{"raw_input":"mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator","actor":"robert","approval_proof":"<approval_proof>"}'
+```
+
 Audit verification endpoint:
 
 ```bash
@@ -260,6 +284,9 @@ curl -s -X POST http://127.0.0.1:8080/v1/audit/verify \
 Notes:
 - `GET /` and `GET /dashboard` serve an interactive dashboard for non-CLI users.
 - `GET /v1/decide` and `GET /v1/audit/verify` return `405 MethodNotAllowed` (use `POST`).
+- `POST /v1/confirmation/sign` and `POST /v1/confirmation/verify` require:
+  - `X-AETHERYA-Admin-Key` matching `AETHERYA_APPROVALS_API_KEY`
+  - localhost caller by default (`127.0.0.1` / `::1`)
 
 ## Running tests
 

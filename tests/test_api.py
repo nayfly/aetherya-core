@@ -256,6 +256,9 @@ def test_api_internal_parsers_and_constitution_path_branch(tmp_path: Path) -> No
         api_module._as_optional_int("x", field_name="event_index")  # noqa: SLF001
 
     assert api_module._as_optional_str("   ", field_name="attestation_key") is None  # noqa: SLF001
+    assert api_module._header_value(None, "x-a") == ""  # noqa: SLF001
+    assert api_module._header_value({"y": "z"}, "x-a") == ""  # noqa: SLF001
+    assert api_module._header_value({"X-A": " value "}, "x-a") == "value"  # noqa: SLF001
 
     policy_path = _write_policy(tmp_path, lambda data: None)
     constitution_path = tmp_path / "constitution.yaml"
@@ -313,3 +316,330 @@ def test_api_dispatch_method_not_allowed_for_post_routes(tmp_path: Path) -> None
     assert payload_verify["ok"] is False
     assert payload_verify["error_type"] == "MethodNotAllowed"
     assert payload_verify["allowed_methods"] == ["POST"]
+
+    status_sign, payload_sign = api.dispatch("GET", "/v1/confirmation/sign")
+    assert status_sign == 405
+    assert payload_sign["ok"] is False
+    assert payload_sign["error_type"] == "MethodNotAllowed"
+    assert payload_sign["allowed_methods"] == ["POST"]
+
+    status_proof_verify, payload_proof_verify = api.dispatch("GET", "/v1/confirmation/verify")
+    assert status_proof_verify == 405
+    assert payload_proof_verify["ok"] is False
+    assert payload_proof_verify["error_type"] == "MethodNotAllowed"
+    assert payload_proof_verify["allowed_methods"] == ["POST"]
+
+
+def test_api_confirmation_sign_and_verify_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {
+                "enabled": True,
+                "key_env": "AETHERYA_TEST_SIGN_KEY_API",
+                "active_kid": "k1",
+                "max_valid_for_sec": 120,
+                "clock_skew_sec": 1,
+                "replay_mode": "single_use",
+            }
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_KEY_API", "api-sign-key")
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-secret")
+    monkeypatch.delenv("AETHERYA_CONFIRMATION_HMAC_KEYRING", raising=False)
+
+    api = AetheryaAPI(APISettings(policy_path=policy_path, audit_path=tmp_path / "decisions.jsonl"))
+    raw = (
+        "mode:operative tool:filesystem target:/tmp param.path=/tmp/a "
+        "param.operation=write param.confirm_token=ack:abc12345 "
+        "param.confirm_context=approved_by_operator"
+    )
+    sign_status, sign_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw, "actor": "robert", "expires_in_sec": 30, "now_ts": 1700000000},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert sign_status == 200
+    assert sign_payload["ok"] is True
+    assert sign_payload["approval_proof"].startswith("ap1.")
+    assert sign_payload["kid"] == "k1"
+    assert sign_payload["proof_param"] == "confirm_proof"
+
+    verify_status, verify_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {
+            "raw_input": raw,
+            "actor": "robert",
+            "approval_proof": sign_payload["approval_proof"],
+            "now_ts": 1700000010,
+        },
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert verify_status == 200
+    assert verify_payload["ok"] is True
+    assert verify_payload["valid"] is True
+    assert verify_payload["kid"] == "k1"
+    assert verify_payload["scope_hash"].startswith("sha256:")
+
+
+def test_api_confirmation_sign_auth_guards(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_SIGN_KEY_API"}
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_KEY_API", "api-sign-key")
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-secret")
+    api = AetheryaAPI(APISettings(policy_path=policy_path, audit_path=tmp_path / "decisions.jsonl"))
+    raw = "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write"
+
+    bad_key_status, bad_key_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw, "actor": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "wrong"},
+        client_ip="127.0.0.1",
+    )
+    assert bad_key_status == 401
+    assert bad_key_payload["ok"] is False
+
+    bad_ip_status, bad_ip_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw, "actor": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="10.0.0.7",
+    )
+    assert bad_ip_status == 403
+    assert bad_ip_payload["ok"] is False
+
+    monkeypatch.delenv("AETHERYA_APPROVALS_API_KEY", raising=False)
+    no_key_status, no_key_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw, "actor": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert no_key_status == 503
+    assert no_key_payload["ok"] is False
+
+
+def test_api_confirmation_verify_validation_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_SIGN_KEY_API"}
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_KEY_API", "api-sign-key")
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-secret")
+    api = AetheryaAPI(APISettings(policy_path=policy_path, audit_path=tmp_path / "decisions.jsonl"))
+
+    status_non_operate, payload_non_operate = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {"raw_input": "help user", "actor": "robert", "approval_proof": "ap1.bad"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_non_operate == 400
+    assert "operative action input" in payload_non_operate["error"]
+
+    status_bad_proof, payload_bad_proof = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {
+            "raw_input": "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write",
+            "actor": "robert",
+            "approval_proof": "ap1.bad",
+        },
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_bad_proof == 400
+    assert payload_bad_proof["ok"] is False
+
+
+def test_api_confirmation_sign_validation_and_internal_error_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disabled_dir = tmp_path / "disabled"
+    disabled_dir.mkdir()
+    disabled_policy_path = _write_policy(disabled_dir, lambda data: None)
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-secret")
+    disabled_api = AetheryaAPI(
+        APISettings(policy_path=disabled_policy_path, audit_path=tmp_path / "decisions.jsonl")
+    )
+    raw_operate = (
+        "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write"
+    )
+    status_disabled, payload_disabled = disabled_api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw_operate, "actor": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_disabled == 400
+    assert "signed_proof.enabled=false" in payload_disabled["error"]
+
+    enabled_policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_SIGN_ERR_KEY", "max_valid_for_sec": 10}
+        ),
+    )
+    enabled_api = AetheryaAPI(
+        APISettings(policy_path=enabled_policy_path, audit_path=tmp_path / "decisions.jsonl")
+    )
+    status_ttl_zero, payload_ttl_zero = enabled_api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw_operate, "actor": "robert", "expires_in_sec": 0},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_ttl_zero == 400
+    assert "expires_in_sec must be > 0" in payload_ttl_zero["error"]
+
+    status_ttl_high, payload_ttl_high = enabled_api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw_operate, "actor": "robert", "expires_in_sec": 11},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_ttl_high == 400
+    assert "exceeds policy max_valid_for_sec (10)" in payload_ttl_high["error"]
+
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_ERR_KEY", "sig")
+    status_non_operate, payload_non_operate = enabled_api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": "help user", "actor": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_non_operate == 400
+    assert "operative action input" in payload_non_operate["error"]
+
+    monkeypatch.delenv("AETHERYA_TEST_SIGN_ERR_KEY", raising=False)
+    status_missing_key, payload_missing_key = enabled_api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw_operate, "actor": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_missing_key == 500
+    assert payload_missing_key["ok"] is False
+
+
+def test_api_confirmation_verify_auth_and_internal_error_branches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_VERIFY_ERR_KEY"}
+        ),
+    )
+    api = AetheryaAPI(APISettings(policy_path=policy_path, audit_path=tmp_path / "decisions.jsonl"))
+    raw = "mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write"
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-secret")
+    monkeypatch.delenv("AETHERYA_CONFIRMATION_HMAC_KEYRING", raising=False)
+
+    status_auth, payload_auth = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {"raw_input": raw, "actor": "robert", "approval_proof": "ap1.bad"},
+        headers={"X-AETHERYA-Admin-Key": "wrong"},
+        client_ip="127.0.0.1",
+    )
+    assert status_auth == 401
+    assert payload_auth["ok"] is False
+
+    status_forbidden, payload_forbidden = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {"raw_input": raw, "actor": "robert", "approval_proof": "ap1.bad"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="10.1.2.3",
+    )
+    assert status_forbidden == 403
+    assert payload_forbidden["ok"] is False
+
+    monkeypatch.delenv("AETHERYA_TEST_VERIFY_ERR_KEY", raising=False)
+    status_missing_keyring, payload_missing_keyring = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {"raw_input": raw, "actor": "robert", "approval_proof": "ap1.bad"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_missing_keyring == 500
+    assert payload_missing_keyring["ok"] is False
+
+    disabled_dir = tmp_path / "disabled"
+    disabled_dir.mkdir()
+    disabled_policy_path = _write_policy(disabled_dir, lambda data: None)
+    disabled_api = AetheryaAPI(
+        APISettings(policy_path=disabled_policy_path, audit_path=tmp_path / "decisions.jsonl")
+    )
+    status_disabled, payload_disabled = disabled_api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {"raw_input": raw, "actor": "robert", "approval_proof": "ap1.bad"},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_disabled == 400
+    assert "signed_proof.enabled=false" in payload_disabled["error"]
+
+    import aetherya.api as api_module
+
+    monkeypatch.setenv("AETHERYA_TEST_VERIFY_ERR_KEY", "verify-key")
+    sign_status, sign_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw, "actor": "robert", "expires_in_sec": 60},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert sign_status == 200
+    assert sign_payload["ok"] is True
+
+    def boom(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise RuntimeError("verify boom")
+
+    monkeypatch.setattr(api_module, "verify_approval_proof", boom)
+    status_boom, payload_boom = api.dispatch(
+        "POST",
+        "/v1/confirmation/verify",
+        {
+            "raw_input": raw,
+            "actor": "robert",
+            "approval_proof": sign_payload["approval_proof"],
+        },
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert status_boom == 500
+    assert payload_boom["ok"] is False

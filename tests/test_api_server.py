@@ -77,6 +77,8 @@ def test_dashboard_template_contains_controls() -> None:
     assert "AETHERYA API Dashboard" in html
     assert "/v1/decide" in html
     assert "/v1/audit/verify" in html
+    assert "/v1/confirmation/sign" in html
+    assert "/v1/confirmation/verify" in html
     assert "candidate_response" in html
 
 
@@ -142,6 +144,8 @@ def test_handler_handle_request_branches(tmp_path: Path) -> None:
             self._parse_result = parse_result or {}
             self._parse_error = parse_error
             self.api = service
+            self.headers = {}
+            self.client_address = ("127.0.0.1", 18080)
             self.sent: list[tuple[int, dict]] = []
             self.sent_html: list[tuple[int, str]] = []
 

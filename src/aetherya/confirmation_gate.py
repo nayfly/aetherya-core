@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-import os
 import re
+import threading
+import time
 from typing import TypedDict
 
 from aetherya.actions import ActionRequest
-from aetherya.approval_proof import ApprovalProofError, verify_approval_proof
+from aetherya.approval_proof import (
+    ApprovalProofError,
+    load_approval_keyring,
+    verify_approval_proof,
+)
 from aetherya.config import ConfirmationConfig
 from aetherya.risk import RiskAggregate, RiskDecision
 
@@ -20,11 +25,57 @@ class ConfirmationOutcome(TypedDict, total=False):
     proof_valid: bool
     proof_expires_at: int
     proof_scope_hash: str
+    proof_kid: str
+
+
+class _InMemoryReplayStore:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[tuple[str, str], tuple[str, int]] = {}
+
+    def _cleanup(self, now: int) -> None:
+        stale = [key for key, (_, expires_at) in self._entries.items() if expires_at < now]
+        for key in stale:
+            self._entries.pop(key, None)
+
+    def check_and_mark(
+        self,
+        *,
+        kid: str,
+        nonce: str,
+        scope_hash: str,
+        expires_at: int,
+        replay_mode: str,
+    ) -> str:
+        now = int(time.time())
+        key = (kid, nonce)
+        with self._lock:
+            self._cleanup(now)
+            existing = self._entries.get(key)
+            if existing is None:
+                self._entries[key] = (scope_hash, expires_at)
+                return "ok"
+
+            existing_scope, existing_expiry = existing
+            if replay_mode == "idempotent" and existing_scope == scope_hash:
+                return "ok"
+            if replay_mode == "idempotent":
+                return "nonce_scope_mismatch"
+            return "replay_detected"
+
+
+_REPLAY_STORE = _InMemoryReplayStore()
 
 
 class ConfirmationGate:
-    def __init__(self, cfg: ConfirmationConfig) -> None:
+    def __init__(
+        self,
+        cfg: ConfirmationConfig,
+        *,
+        replay_store: _InMemoryReplayStore | None = None,
+    ) -> None:
         self.cfg = cfg
+        self.replay_store = replay_store or _REPLAY_STORE
 
     def _requires_confirmation(self, action: ActionRequest, aggregate: RiskAggregate) -> bool:
         require = self.cfg.require_for
@@ -96,6 +147,7 @@ class ConfirmationGate:
         signed_proof_cfg = self.cfg.evidence.signed_proof
         proof_expires_at: int | None = None
         proof_scope_hash: str | None = None
+        proof_kid: str | None = None
         proof_tags: list[str] = []
         if signed_proof_cfg.enabled:
             proof_key = signed_proof_cfg.proof_param
@@ -110,12 +162,16 @@ class ConfirmationGate:
                     "proof_valid": False,
                 }
 
-            verifier_secret = os.getenv(signed_proof_cfg.key_env, "").strip()
-            if not verifier_secret:
+            keyring = load_approval_keyring(
+                keyring_env=signed_proof_cfg.keyring_env,
+                fallback_env=signed_proof_cfg.key_env,
+                fallback_kid=signed_proof_cfg.active_kid,
+            )
+            if not keyring:
                 return {
                     "required": True,
                     "confirmed": False,
-                    "reason": "approval verifier key is not configured",
+                    "reason": "approval verifier keyring is not configured",
                     "tags": ["confirmation_required", "confirmation_proof_key_missing"],
                     "proof_required": True,
                     "proof_valid": False,
@@ -124,7 +180,7 @@ class ConfirmationGate:
             exclude_keys = {name for name in action.parameters if str(name).startswith("confirm_")}
             try:
                 verification = verify_approval_proof(
-                    secret=verifier_secret,
+                    keyring=keyring,
                     proof=str(proof_raw),
                     actor=str(actor),
                     action=action,
@@ -146,9 +202,32 @@ class ConfirmationGate:
                     "proof_valid": False,
                 }
 
+            replay_result = self.replay_store.check_and_mark(
+                kid=verification.kid,
+                nonce=verification.nonce,
+                scope_hash=verification.scope_hash,
+                expires_at=verification.expires_at + signed_proof_cfg.clock_skew_sec,
+                replay_mode=signed_proof_cfg.replay_mode,
+            )
+            if replay_result != "ok":
+                return {
+                    "required": True,
+                    "confirmed": False,
+                    "reason": f"out-of-band approval proof replay rejected ({replay_result})",
+                    "tags": [
+                        "confirmation_required",
+                        "confirmation_proof_replay_rejected",
+                        f"confirmation_proof_{replay_result}",
+                    ],
+                    "proof_required": True,
+                    "proof_valid": False,
+                }
+
             proof_expires_at = verification.expires_at
             proof_scope_hash = verification.scope_hash
+            proof_kid = verification.kid
             proof_tags.append("confirmation_proof_validated")
+            proof_tags.append("confirmation_proof_replay_checked")
 
         outcome: ConfirmationOutcome = {
             "required": True,
@@ -163,6 +242,8 @@ class ConfirmationGate:
             outcome["proof_expires_at"] = int(proof_expires_at)
         if proof_scope_hash is not None:
             outcome["proof_scope_hash"] = str(proof_scope_hash)
+        if proof_kid is not None:
+            outcome["proof_kid"] = str(proof_kid)
 
         if aggregate.decision == RiskDecision.REQUIRE_CONFIRM:
             outcome["override_decision"] = self.cfg.on_confirmed

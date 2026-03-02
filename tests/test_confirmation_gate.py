@@ -10,7 +10,7 @@ from aetherya.config import (
     ConfirmationRequireConfig,
     ConfirmationSignedProofConfig,
 )
-from aetherya.confirmation_gate import ConfirmationGate
+from aetherya.confirmation_gate import ConfirmationGate, _InMemoryReplayStore
 from aetherya.risk import RiskAggregate, RiskDecision, RiskSignal
 
 
@@ -24,6 +24,8 @@ def make_confirmation_gate(
     on_confirmed: str = "allow",
     signed_proof_enabled: bool = False,
     signed_proof_key_env: str = "AETHERYA_CONFIRMATION_HMAC_KEY",
+    signed_proof_active_kid: str = "k1",
+    signed_proof_replay_mode: str = "single_use",
 ) -> ConfirmationGate:
     require_decisions = decisions if decisions is not None else ["require_confirm"]
     require_tools = tools if tools is not None else []
@@ -46,8 +48,11 @@ def make_confirmation_gate(
                 enabled=signed_proof_enabled,
                 proof_param="confirm_proof",
                 key_env=signed_proof_key_env,
+                keyring_env="AETHERYA_CONFIRMATION_HMAC_KEYRING",
+                active_kid=signed_proof_active_kid,
                 max_valid_for_sec=300,
                 clock_skew_sec=2,
+                replay_mode=signed_proof_replay_mode,
             ),
         ),
     )
@@ -240,6 +245,7 @@ def test_confirmation_gate_accepts_valid_signed_proof(
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="secret-signing-key",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=60,
@@ -257,6 +263,7 @@ def test_confirmation_gate_accepts_valid_signed_proof(
     assert out["confirmed"] is True
     assert out["proof_required"] is True
     assert out["proof_valid"] is True
+    assert out["proof_kid"] == "k1"
     assert out["proof_scope_hash"].startswith("sha256:")
     assert out["override_decision"] == "allow"
     assert "confirmation_proof_validated" in out["tags"]
@@ -286,6 +293,7 @@ def test_confirmation_gate_rejects_signed_proof_bound_to_other_actor(
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="actor-bound-key",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=60,
@@ -302,4 +310,159 @@ def test_confirmation_gate_rejects_signed_proof_bound_to_other_actor(
     assert out is not None
     assert out["confirmed"] is False
     assert "confirmation_proof_invalid" in out["tags"]
-    assert "confirmation_proof_invalid_signature" in out["tags"]
+    assert "confirmation_proof_scope_mismatch" in out["tags"]
+
+
+def test_confirmation_gate_rejects_signed_proof_replay_single_use(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    gate = make_confirmation_gate(
+        signed_proof_enabled=True,
+        signed_proof_key_env="AETHERYA_TEST_REPLAY_KEY",
+        signed_proof_replay_mode="single_use",
+    )
+    monkeypatch.setenv("AETHERYA_TEST_REPLAY_KEY", "replay-key")
+    action = ActionRequest(
+        raw_input="run",
+        intent="operate",
+        tool="filesystem",
+        target="/tmp",
+        parameters={
+            "operation": "write",
+            "path": "/tmp/a.txt",
+            "confirm_token": "ack:abc12345",
+            "confirm_context": "approved by operator",
+        },
+    )
+    excluded = {name for name in action.parameters if name.startswith("confirm_")}
+    proof, _ = build_approval_proof(
+        secret="replay-key",
+        kid="k1",
+        actor="robert",
+        action=action,
+        ttl_sec=60,
+        now_ts=int(time.time()),
+        nonce="replay123",
+        exclude_params=excluded,
+    )
+    action.parameters["confirm_proof"] = proof
+
+    out_first = gate.evaluate(
+        action=action,
+        aggregate=make_aggregate(RiskDecision.REQUIRE_CONFIRM),
+        actor="robert",
+    )
+    assert out_first is not None
+    assert out_first["confirmed"] is True
+
+    out_second = gate.evaluate(
+        action=action,
+        aggregate=make_aggregate(RiskDecision.REQUIRE_CONFIRM),
+        actor="robert",
+    )
+    assert out_second is not None
+    assert out_second["confirmed"] is False
+    assert "confirmation_proof_replay_rejected" in out_second["tags"]
+    assert "confirmation_proof_replay_detected" in out_second["tags"]
+
+
+def test_confirmation_gate_allows_idempotent_reuse_for_same_scope(
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    gate = make_confirmation_gate(
+        signed_proof_enabled=True,
+        signed_proof_key_env="AETHERYA_TEST_IDEMPOTENT_KEY",
+        signed_proof_replay_mode="idempotent",
+    )
+    monkeypatch.setenv("AETHERYA_TEST_IDEMPOTENT_KEY", "idempotent-key")
+    action = ActionRequest(
+        raw_input="run",
+        intent="operate",
+        tool="filesystem",
+        target="/tmp",
+        parameters={
+            "operation": "write",
+            "path": "/tmp/a.txt",
+            "confirm_token": "ack:abc12345",
+            "confirm_context": "approved by operator",
+        },
+    )
+    excluded = {name for name in action.parameters if name.startswith("confirm_")}
+    proof, _ = build_approval_proof(
+        secret="idempotent-key",
+        kid="k1",
+        actor="robert",
+        action=action,
+        ttl_sec=60,
+        now_ts=int(time.time()),
+        nonce="same-nonce",
+        exclude_params=excluded,
+    )
+    action.parameters["confirm_proof"] = proof
+
+    out_first = gate.evaluate(
+        action=action,
+        aggregate=make_aggregate(RiskDecision.REQUIRE_CONFIRM),
+        actor="robert",
+    )
+    out_second = gate.evaluate(
+        action=action,
+        aggregate=make_aggregate(RiskDecision.REQUIRE_CONFIRM),
+        actor="robert",
+    )
+    assert out_first is not None and out_first["confirmed"] is True
+    assert out_second is not None and out_second["confirmed"] is True
+
+
+def test_replay_store_cleanup_and_expired_refresh(monkeypatch) -> None:  # noqa: ANN001
+    store = _InMemoryReplayStore()
+    store._entries[("k1", "stale")] = ("sha256:aaa", 5)  # noqa: SLF001
+    monkeypatch.setattr("aetherya.confirmation_gate.time.time", lambda: 10.0)
+    assert (
+        store.check_and_mark(
+            kid="k1",
+            nonce="fresh",
+            scope_hash="sha256:bbb",
+            expires_at=20,
+            replay_mode="single_use",
+        )
+        == "ok"
+    )
+    assert ("k1", "stale") not in store._entries  # noqa: SLF001
+
+    store._entries[("k1", "expiring")] = ("sha256:old", 9)  # noqa: SLF001
+    assert (
+        store.check_and_mark(
+            kid="k1",
+            nonce="expiring",
+            scope_hash="sha256:new",
+            expires_at=25,
+            replay_mode="single_use",
+        )
+        == "ok"
+    )
+    assert store._entries[("k1", "expiring")] == ("sha256:new", 25)  # noqa: SLF001
+
+
+def test_replay_store_idempotent_scope_mismatch() -> None:
+    store = _InMemoryReplayStore()
+    assert (
+        store.check_and_mark(
+            kid="k1",
+            nonce="n1",
+            scope_hash="sha256:a",
+            expires_at=int(time.time()) + 30,
+            replay_mode="idempotent",
+        )
+        == "ok"
+    )
+    assert (
+        store.check_and_mark(
+            kid="k1",
+            nonce="n1",
+            scope_hash="sha256:b",
+            expires_at=int(time.time()) + 30,
+            replay_mode="idempotent",
+        )
+        == "nonce_scope_mismatch"
+    )

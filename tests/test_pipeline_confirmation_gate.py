@@ -164,6 +164,7 @@ def test_pipeline_signed_proof_allows_when_valid(
     excluded = {name for name in action.parameters if name.startswith("confirm_")}
     proof, _ = build_approval_proof(
         secret="integration-sign-key",
+        kid="k1",
         actor="robert",
         action=action,
         ttl_sec=60,
@@ -178,3 +179,58 @@ def test_pipeline_signed_proof_allows_when_valid(
     )
     assert decision.allowed is True
     assert decision.state == "allow"
+
+
+def test_pipeline_signed_proof_replay_rejected_in_single_use_mode(
+    tmp_path: Path,
+    monkeypatch,  # noqa: ANN001
+) -> None:
+    policy_path = write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {
+                "enabled": True,
+                "key_env": "AETHERYA_TEST_SIGN_KEY_REPLAY",
+                "active_kid": "k1",
+                "replay_mode": "single_use",
+                "max_valid_for_sec": 300,
+                "clock_skew_sec": 2,
+            }
+        ),
+    )
+    cfg = load_policy_config(policy_path)
+    monkeypatch.setenv("AETHERYA_TEST_SIGN_KEY_REPLAY", "integration-sign-key")
+
+    base_input = (
+        "mode:operative tool:filesystem target:/tmp param.path=/tmp/a "
+        "param.operation=write param.confirm_token=ack:abc12345 "
+        "param.confirm_context=approved_by_operator"
+    )
+    action = validate_action_request(parse_user_input(base_input))
+    excluded = {name for name in action.parameters if name.startswith("confirm_")}
+    proof, _ = build_approval_proof(
+        secret="integration-sign-key",
+        kid="k1",
+        actor="robert",
+        action=action,
+        ttl_sec=60,
+        nonce="fixedreplay",
+        exclude_params=excluded,
+    )
+
+    first = run_pipeline(
+        f"{base_input} param.confirm_proof={proof}",
+        constitution=make_core(),
+        actor="robert",
+        cfg=cfg,
+    )
+    second = run_pipeline(
+        f"{base_input} param.confirm_proof={proof}",
+        constitution=make_core(),
+        actor="robert",
+        cfg=cfg,
+    )
+    assert first.allowed is True
+    assert second.allowed is False
+    assert second.state == "escalate"
+    assert "replay rejected" in second.reason

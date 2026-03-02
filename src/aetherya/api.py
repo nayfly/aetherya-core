@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import hmac
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aetherya.actions import validate_action_request, validate_actor
+from aetherya.approval_proof import (
+    approval_scope_hash,
+    build_approval_proof,
+    load_approval_keyring,
+    verify_approval_proof,
+)
 from aetherya.audit import AuditLogger
 from aetherya.audit_verify import _build_report, verify_audit_file
 from aetherya.cli import (
@@ -14,6 +23,7 @@ from aetherya.cli import (
 )
 from aetherya.config import load_policy_config
 from aetherya.constitution import Constitution
+from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
 
 
@@ -23,6 +33,8 @@ class APISettings:
     audit_path: Path | None = Path("audit/decisions.jsonl")
     constitution_path: Path | None = None
     default_actor: str = "robert"
+    approval_admin_key_env: str = "AETHERYA_APPROVALS_API_KEY"
+    approval_sign_local_only: bool = True
 
 
 def _as_mapping(payload: Any, *, field_name: str) -> dict[str, Any]:
@@ -69,6 +81,16 @@ def _as_optional_str(value: Any, *, field_name: str) -> str | None:
     return cleaned if cleaned else None
 
 
+def _header_value(headers: dict[str, Any] | None, key: str) -> str:
+    if not headers:
+        return ""
+    target = key.strip().lower()
+    for raw_key, raw_value in headers.items():
+        if str(raw_key).strip().lower() == target:
+            return str(raw_value).strip()
+    return ""
+
+
 class AetheryaAPI:
     def __init__(self, settings: APISettings | None = None):
         self.settings = settings or APISettings()
@@ -78,6 +100,48 @@ class AetheryaAPI:
         if path is None:
             return _default_constitution()
         return _load_constitution(path)
+
+    def _authorize_admin(
+        self,
+        *,
+        headers: dict[str, Any] | None,
+        client_ip: str | None,
+    ) -> tuple[int, dict[str, Any]] | None:
+        if self.settings.approval_sign_local_only and client_ip not in {"127.0.0.1", "::1"}:
+            return (
+                403,
+                {
+                    "ok": False,
+                    "error_type": "Forbidden",
+                    "error": "confirmation admin routes are localhost-only",
+                },
+            )
+
+        expected_key = os.getenv(self.settings.approval_admin_key_env, "").strip()
+        if not expected_key:
+            return (
+                503,
+                {
+                    "ok": False,
+                    "error_type": "ServiceUnavailable",
+                    "error": (
+                        "approval admin key is not configured "
+                        f"({self.settings.approval_admin_key_env})"
+                    ),
+                },
+            )
+
+        provided_key = _header_value(headers, "x-aetherya-admin-key")
+        if not provided_key or not hmac.compare_digest(provided_key, expected_key):
+            return (
+                401,
+                {
+                    "ok": False,
+                    "error_type": "Unauthorized",
+                    "error": "missing or invalid admin key for confirmation route",
+                },
+            )
+        return None
 
     def health(self) -> tuple[int, dict[str, Any]]:
         try:
@@ -226,7 +290,193 @@ class AetheryaAPI:
                 {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
             )
 
-    def dispatch(self, method: str, path: str, payload: Any = None) -> tuple[int, dict[str, Any]]:
+    def confirmation_sign(
+        self,
+        payload: Any,
+        *,
+        headers: dict[str, Any] | None,
+        client_ip: str | None,
+    ) -> tuple[int, dict[str, Any]]:
+        auth_error = self._authorize_admin(headers=headers, client_ip=client_ip)
+        if auth_error is not None:
+            return auth_error
+        try:
+            body = _as_mapping(payload, field_name="confirmation sign payload")
+            raw_input = _as_non_empty_str(body.get("raw_input"), field_name="raw_input")
+            actor = validate_actor(
+                _as_non_empty_str(
+                    body.get("actor", self.settings.default_actor),
+                    field_name="actor",
+                )
+            )
+            expires_in_sec = _as_optional_int(
+                body.get("expires_in_sec"), field_name="expires_in_sec"
+            )
+            now_ts = _as_optional_int(body.get("now_ts"), field_name="now_ts")
+
+            cfg = load_policy_config(self.settings.policy_path)
+            signed_cfg = cfg.confirmation.evidence.signed_proof
+            if not signed_cfg.enabled:
+                raise ValueError(
+                    "confirmation.evidence.signed_proof.enabled=false in current policy"
+                )
+
+            ttl = (
+                int(expires_in_sec) if expires_in_sec is not None else signed_cfg.max_valid_for_sec
+            )
+            if ttl <= 0:
+                raise ValueError("expires_in_sec must be > 0")
+            if ttl > signed_cfg.max_valid_for_sec:
+                raise ValueError(
+                    f"expires_in_sec exceeds policy max_valid_for_sec ({signed_cfg.max_valid_for_sec})"
+                )
+
+            action = validate_action_request(parse_user_input(raw_input))
+            if action.intent != "operate":
+                raise ValueError("confirmation sign requires an operative action input")
+            excluded = {name for name in action.parameters if str(name).startswith("confirm_")}
+
+            keyring = load_approval_keyring(
+                keyring_env=signed_cfg.keyring_env,
+                fallback_env=signed_cfg.key_env,
+                fallback_kid=signed_cfg.active_kid,
+            )
+            secret = keyring.get(signed_cfg.active_kid, "").strip()
+            if not secret:
+                raise RuntimeError(
+                    "missing approval signing key for active kid "
+                    f"'{signed_cfg.active_kid}' in env vars: "
+                    f"{signed_cfg.keyring_env} or {signed_cfg.key_env}"
+                )
+
+            proof, expires_at = build_approval_proof(
+                secret=secret,
+                kid=signed_cfg.active_kid,
+                actor=actor,
+                action=action,
+                ttl_sec=ttl,
+                now_ts=now_ts,
+                exclude_params=excluded,
+            )
+            scope_hash = approval_scope_hash(actor=actor, action=action, exclude_params=excluded)
+            return (
+                200,
+                {
+                    "ok": True,
+                    "approval_proof": proof,
+                    "proof_param": signed_cfg.proof_param,
+                    "kid": signed_cfg.active_kid,
+                    "expires_at": int(expires_at),
+                    "expires_in_sec": int(ttl),
+                    "scope_hash": scope_hash,
+                    "actor": actor,
+                    "operation": action.parameters.get("operation"),
+                    "tool": action.tool,
+                    "target": action.target,
+                    "replay_mode": signed_cfg.replay_mode,
+                    "policy_path": str(self.settings.policy_path),
+                },
+            )
+        except ValueError as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+        except Exception as exc:
+            return (
+                500,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def confirmation_verify(
+        self,
+        payload: Any,
+        *,
+        headers: dict[str, Any] | None,
+        client_ip: str | None,
+    ) -> tuple[int, dict[str, Any]]:
+        auth_error = self._authorize_admin(headers=headers, client_ip=client_ip)
+        if auth_error is not None:
+            return auth_error
+        try:
+            body = _as_mapping(payload, field_name="confirmation verify payload")
+            raw_input = _as_non_empty_str(body.get("raw_input"), field_name="raw_input")
+            actor = validate_actor(
+                _as_non_empty_str(
+                    body.get("actor", self.settings.default_actor),
+                    field_name="actor",
+                )
+            )
+            approval_proof = _as_non_empty_str(
+                body.get("approval_proof"), field_name="approval_proof"
+            )
+            now_ts = _as_optional_int(body.get("now_ts"), field_name="now_ts")
+
+            cfg = load_policy_config(self.settings.policy_path)
+            signed_cfg = cfg.confirmation.evidence.signed_proof
+            if not signed_cfg.enabled:
+                raise ValueError(
+                    "confirmation.evidence.signed_proof.enabled=false in current policy"
+                )
+
+            action = validate_action_request(parse_user_input(raw_input))
+            if action.intent != "operate":
+                raise ValueError("confirmation verify requires an operative action input")
+
+            keyring = load_approval_keyring(
+                keyring_env=signed_cfg.keyring_env,
+                fallback_env=signed_cfg.key_env,
+                fallback_kid=signed_cfg.active_kid,
+            )
+            if not keyring:
+                raise RuntimeError(
+                    "approval verifier keyring is not configured "
+                    f"({signed_cfg.keyring_env} or {signed_cfg.key_env})"
+                )
+
+            excluded = {name for name in action.parameters if str(name).startswith("confirm_")}
+            verification = verify_approval_proof(
+                keyring=keyring,
+                proof=approval_proof,
+                actor=actor,
+                action=action,
+                now_ts=now_ts,
+                clock_skew_sec=signed_cfg.clock_skew_sec,
+                max_valid_for_sec=signed_cfg.max_valid_for_sec,
+                exclude_params=excluded,
+            )
+            return (
+                200,
+                {
+                    "ok": True,
+                    "valid": True,
+                    "proof_version": verification.proof_version,
+                    "kid": verification.kid,
+                    "expires_at": int(verification.expires_at),
+                    "nonce": verification.nonce,
+                    "scope_hash": verification.scope_hash,
+                },
+            )
+        except ValueError as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+        except Exception as exc:
+            return (
+                500,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def dispatch(
+        self,
+        method: str,
+        path: str,
+        payload: Any = None,
+        *,
+        headers: dict[str, Any] | None = None,
+        client_ip: str | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         if method == "GET" and path == "/health":
             return self.health()
         if path == "/v1/decide":
@@ -250,6 +500,30 @@ class AetheryaAPI:
                     "ok": False,
                     "error_type": "MethodNotAllowed",
                     "error": "method not allowed for /v1/audit/verify",
+                    "allowed_methods": ["POST"],
+                },
+            )
+        if path == "/v1/confirmation/sign":
+            if method == "POST":
+                return self.confirmation_sign(payload, headers=headers, client_ip=client_ip)
+            return (
+                405,
+                {
+                    "ok": False,
+                    "error_type": "MethodNotAllowed",
+                    "error": "method not allowed for /v1/confirmation/sign",
+                    "allowed_methods": ["POST"],
+                },
+            )
+        if path == "/v1/confirmation/verify":
+            if method == "POST":
+                return self.confirmation_verify(payload, headers=headers, client_ip=client_ip)
+            return (
+                405,
+                {
+                    "ok": False,
+                    "error_type": "MethodNotAllowed",
+                    "error": "method not allowed for /v1/confirmation/verify",
                     "allowed_methods": ["POST"],
                 },
             )

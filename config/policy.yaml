@@ -106,8 +106,11 @@ confirmation:
       enabled: false
       proof_param: confirm_proof
       key_env: AETHERYA_CONFIRMATION_HMAC_KEY
+      keyring_env: AETHERYA_CONFIRMATION_HMAC_KEYRING
+      active_kid: k1
       max_valid_for_sec: 900
       clock_skew_sec: 5
+      replay_mode: single_use
 
 llm_shadow:
   enabled: false

@@ -167,6 +167,7 @@ def test_cli_confirmation_sign_json_output(
     payload = json.loads(capsys.readouterr().out.strip())
     assert payload["ok"] is True
     assert payload["approval_proof"].startswith("ap1.")
+    assert payload["kid"] == "k1"
     assert payload["expires_at"] == 1_700_000_060
     assert payload["scope_hash"].startswith("sha256:")
 
@@ -303,7 +304,7 @@ def test_cli_confirmation_sign_rejects_missing_env_key(
     )
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().err.strip())
-    assert "missing approval key in env var" in payload["error"]
+    assert "missing approval key for kid" in payload["error"]
 
 
 def test_cli_confirmation_sign_rejects_invalid_expiry_values(

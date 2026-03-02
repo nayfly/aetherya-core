@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -11,7 +10,11 @@ from typing import Any
 import yaml
 
 from aetherya.actions import validate_action_request, validate_actor
-from aetherya.approval_proof import approval_scope_hash, build_approval_proof
+from aetherya.approval_proof import (
+    approval_scope_hash,
+    build_approval_proof,
+    load_approval_keyring,
+)
 from aetherya.audit import AuditLogger
 from aetherya.audit_verify import main as audit_verify_main
 from aetherya.chaos_benchmark import main as chaos_benchmark_main
@@ -238,9 +241,18 @@ def _cmd_confirmation_sign(args: argparse.Namespace) -> int:
     key_env = str(args.key_env).strip() if args.key_env is not None else signed_cfg.key_env
     if not key_env:
         raise ValueError("key_env must be non-empty")
-    secret = os.getenv(key_env, "").strip()
+    keyring_env = signed_cfg.keyring_env
+    active_kid = signed_cfg.active_kid
+    keyring = load_approval_keyring(
+        keyring_env=keyring_env,
+        fallback_env=key_env,
+        fallback_kid=active_kid,
+    )
+    secret = keyring.get(active_kid, "").strip()
     if not secret:
-        raise ValueError(f"missing approval key in env var: {key_env}")
+        raise ValueError(
+            f"missing approval key for kid '{active_kid}' in env vars: {keyring_env} or {key_env}"
+        )
 
     expires_in_sec = (
         int(args.expires_in_sec)
@@ -261,6 +273,7 @@ def _cmd_confirmation_sign(args: argparse.Namespace) -> int:
     exclude_keys = {name for name in action.parameters if str(name).startswith("confirm_")}
     proof, expires_at = build_approval_proof(
         secret=secret,
+        kid=active_kid,
         actor=actor,
         action=action,
         ttl_sec=expires_in_sec,
@@ -281,6 +294,8 @@ def _cmd_confirmation_sign(args: argparse.Namespace) -> int:
         "operation": action.parameters.get("operation"),
         "policy_path": str(policy_path),
         "key_env": key_env,
+        "keyring_env": keyring_env,
+        "kid": active_kid,
     }
 
     if args.json:

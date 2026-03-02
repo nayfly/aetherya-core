@@ -52,11 +52,19 @@ All notable changes to this project are documented in this file.
   - API/CLI support via optional `candidate_response`
   - fail-closed stage for output validation errors (`fail_closed:output_gate`)
 - Added out-of-band confirmation proof support for sensitive operations:
-  - deterministic HMAC proof format (`ap1.<expires_at>.<nonce>.<signature>`)
+  - deterministic HMAC proof format (`ap1.<kid>.<expires_at>.<nonce>.<scope_hash>.<signature>`)
   - action-bound scope hashing (`actor` + tool/operation/target/params)
   - policy-configurable proof verification window and clock skew guards
-  - optional `signed_proof` confirmation policy block (`enabled`, `proof_param`, `key_env`)
+  - optional `signed_proof` confirmation policy block (`enabled`, `proof_param`, `key_env`, `keyring_env`, `active_kid`, `replay_mode`)
   - new CLI command: `aetherya confirmation sign` to mint proofs for interactive/ops workflows
+- Added replay protection for signed confirmation proofs in `ConfirmationGate`:
+  - in-memory TTL nonce store
+  - `single_use` and `idempotent` modes
+  - deterministic replay-rejection reasons/tags in decision trace
+- Added admin-protected confirmation API routes:
+  - `POST /v1/confirmation/sign`
+  - `POST /v1/confirmation/verify`
+  - localhost-only by default + `X-AETHERYA-Admin-Key` check (`AETHERYA_APPROVALS_API_KEY`)
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.

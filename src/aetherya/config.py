@@ -76,8 +76,11 @@ class ConfirmationSignedProofConfig:
     enabled: bool = False
     proof_param: str = "confirm_proof"
     key_env: str = "AETHERYA_CONFIRMATION_HMAC_KEY"
+    keyring_env: str = "AETHERYA_CONFIRMATION_HMAC_KEYRING"
+    active_kid: str = "k1"
     max_valid_for_sec: int = 900
     clock_skew_sec: int = 5
+    replay_mode: str = "single_use"
 
 
 @dataclass(frozen=True)
@@ -266,8 +269,13 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
 
     proof_param = str(signed_proof_raw.get("proof_param", "confirm_proof")).strip()
     key_env = str(signed_proof_raw.get("key_env", "AETHERYA_CONFIRMATION_HMAC_KEY")).strip()
+    keyring_env = str(
+        signed_proof_raw.get("keyring_env", "AETHERYA_CONFIRMATION_HMAC_KEYRING")
+    ).strip()
+    active_kid = str(signed_proof_raw.get("active_kid", "k1")).strip().lower()
     max_valid_for_sec = int(signed_proof_raw.get("max_valid_for_sec", 900))
     clock_skew_sec = int(signed_proof_raw.get("clock_skew_sec", 5))
+    replay_mode = str(signed_proof_raw.get("replay_mode", "single_use")).strip().lower()
 
     if not proof_param:
         raise ValueError("confirmation.evidence.signed_proof.proof_param must be non-empty")
@@ -277,17 +285,28 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
         )
     if not key_env:
         raise ValueError("confirmation.evidence.signed_proof.key_env must be non-empty")
+    if not keyring_env:
+        raise ValueError("confirmation.evidence.signed_proof.keyring_env must be non-empty")
+    if not active_kid:
+        raise ValueError("confirmation.evidence.signed_proof.active_kid must be non-empty")
     if max_valid_for_sec <= 0:
         raise ValueError("confirmation.evidence.signed_proof.max_valid_for_sec must be > 0")
     if clock_skew_sec < 0:
         raise ValueError("confirmation.evidence.signed_proof.clock_skew_sec must be >= 0")
+    if replay_mode not in {"single_use", "idempotent"}:
+        raise ValueError(
+            "confirmation.evidence.signed_proof.replay_mode must be one of: single_use, idempotent"
+        )
 
     signed_proof = ConfirmationSignedProofConfig(
         enabled=bool(signed_proof_raw.get("enabled", False)),
         proof_param=proof_param,
         key_env=key_env,
+        keyring_env=keyring_env,
+        active_kid=active_kid,
         max_valid_for_sec=max_valid_for_sec,
         clock_skew_sec=clock_skew_sec,
+        replay_mode=replay_mode,
     )
 
     evidence = ConfirmationEvidenceConfig(

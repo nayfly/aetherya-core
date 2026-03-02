@@ -165,7 +165,7 @@ def _dashboard_html() -> str:
   <div class="wrap">
     <section class="hero">
       <h1>AETHERYA API Dashboard</h1>
-      <p>Interactive panel for health checks, policy decisions, and audit-chain verification.</p>
+      <p>Interactive panel for health checks, policy decisions, signed approvals, and audit-chain verification.</p>
     </section>
 
     <section class="grid">
@@ -190,6 +190,38 @@ def _dashboard_html() -> str:
           <label class="check"><input id="decide-wait-shadow" type="checkbox" checked>wait_shadow</label>
           <button id="btn-decide" type="button">POST /v1/decide</button>
           <span class="status" id="decide-status">idle</span>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>Confirmation Sign (Admin)</h2>
+        <label for="sign-raw">raw_input</label>
+        <textarea id="sign-raw">mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator</textarea>
+        <label for="sign-actor">actor</label>
+        <input id="sign-actor" type="text" value="robert">
+        <label for="sign-ttl">expires_in_sec (optional)</label>
+        <input id="sign-ttl" type="text" value="60">
+        <label for="sign-admin">x-aetherya-admin-key</label>
+        <input id="sign-admin" type="password" placeholder="admin key for human-only signing">
+        <div class="row">
+          <button id="btn-sign" type="button">POST /v1/confirmation/sign</button>
+          <span class="status" id="sign-status">idle</span>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>Confirmation Verify (Admin)</h2>
+        <label for="verify-proof-raw">raw_input</label>
+        <textarea id="verify-proof-raw">mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator</textarea>
+        <label for="verify-proof-actor">actor</label>
+        <input id="verify-proof-actor" type="text" value="robert">
+        <label for="verify-proof-value">approval_proof</label>
+        <input id="verify-proof-value" type="text" placeholder="ap1.kid.exp.nonce.scope_hash.sig">
+        <label for="verify-admin">x-aetherya-admin-key</label>
+        <input id="verify-admin" type="password" placeholder="admin key for human-only verify">
+        <div class="row">
+          <button id="btn-proof-verify" type="button">POST /v1/confirmation/verify</button>
+          <span class="status" id="proof-verify-status">idle</span>
         </div>
       </article>
 
@@ -224,21 +256,26 @@ def _dashboard_html() -> str:
     const render = (data) => {
       view.textContent = JSON.stringify(data, null, 2);
     };
-    const request = async (statusId, url, body = null) => {
+    const request = async (statusId, url, body = null, extraHeaders = null) => {
       setStatus(statusId, "loading...", false);
       try {
         const opts = body === null ? {} : {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(extraHeaders || {}),
+          },
           body: JSON.stringify(body),
         };
         const res = await fetch(url, opts);
         const data = await res.json();
         render({ http_status: res.status, ...data });
         setStatus(statusId, `HTTP ${res.status}`, !res.ok);
+        return { res, data };
       } catch (err) {
         render({ ok: false, error_type: "NetworkError", error: String(err) });
         setStatus(statusId, "network error", true);
+        return null;
       }
     };
 
@@ -259,6 +296,43 @@ def _dashboard_html() -> str:
       request("decide-status", "/v1/decide", {
         ...payload,
       });
+    });
+
+    document.getElementById("btn-sign").addEventListener("click", async () => {
+      const ttlRaw = document.getElementById("sign-ttl").value.trim();
+      const adminKey = document.getElementById("sign-admin").value.trim();
+      const payload = {
+        raw_input: document.getElementById("sign-raw").value,
+        actor: document.getElementById("sign-actor").value,
+      };
+      if (ttlRaw) {
+        const ttl = Number(ttlRaw);
+        payload.expires_in_sec = Number.isInteger(ttl) ? ttl : ttlRaw;
+      }
+      const result = await request(
+        "sign-status",
+        "/v1/confirmation/sign",
+        payload,
+        adminKey ? { "X-AETHERYA-Admin-Key": adminKey } : {}
+      );
+      if (result && result.data && result.data.approval_proof) {
+        document.getElementById("verify-proof-value").value = result.data.approval_proof;
+      }
+    });
+
+    document.getElementById("btn-proof-verify").addEventListener("click", () => {
+      const adminKey = document.getElementById("verify-admin").value.trim();
+      const payload = {
+        raw_input: document.getElementById("verify-proof-raw").value,
+        actor: document.getElementById("verify-proof-actor").value,
+        approval_proof: document.getElementById("verify-proof-value").value,
+      };
+      request(
+        "proof-verify-status",
+        "/v1/confirmation/verify",
+        payload,
+        adminKey ? { "X-AETHERYA-Admin-Key": adminKey } : {}
+      );
     });
 
     document.getElementById("btn-verify").addEventListener("click", () => {
@@ -367,7 +441,13 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
-        status, response = self.api.dispatch(method=method, path=path, payload=payload)
+        status, response = self.api.dispatch(
+            method=method,
+            path=path,
+            payload=payload,
+            headers={str(k): str(v) for k, v in self.headers.items()},
+            client_ip=str(self.client_address[0]) if self.client_address else None,
+        )
         self._send_json(status, response)
 
     def do_GET(self) -> None:  # noqa: N802

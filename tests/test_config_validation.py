@@ -173,6 +173,11 @@ def test_confirmation_defaults_when_missing(tmp_path):
     assert cfg.confirmation.evidence.token_param == "confirm_token"
     assert cfg.confirmation.evidence.signed_proof.enabled is False
     assert cfg.confirmation.evidence.signed_proof.proof_param == "confirm_proof"
+    assert (
+        cfg.confirmation.evidence.signed_proof.keyring_env == "AETHERYA_CONFIRMATION_HMAC_KEYRING"
+    )
+    assert cfg.confirmation.evidence.signed_proof.active_kid == "k1"
+    assert cfg.confirmation.evidence.signed_proof.replay_mode == "single_use"
 
 
 def test_confirmation_parsing(tmp_path):
@@ -204,8 +209,11 @@ def test_confirmation_parsing(tmp_path):
                     "enabled": True,
                     "proof_param": "confirm_proof",
                     "key_env": "AETHERYA_CONFIRMATION_HMAC_KEY",
+                    "keyring_env": "AETHERYA_CONFIRMATION_HMAC_KEYRING",
+                    "active_kid": "k2",
                     "max_valid_for_sec": 600,
                     "clock_skew_sec": 3,
+                    "replay_mode": "idempotent",
                 },
             },
         },
@@ -222,8 +230,13 @@ def test_confirmation_parsing(tmp_path):
     assert cfg.confirmation.evidence.signed_proof.enabled is True
     assert cfg.confirmation.evidence.signed_proof.proof_param == "confirm_proof"
     assert cfg.confirmation.evidence.signed_proof.key_env == "AETHERYA_CONFIRMATION_HMAC_KEY"
+    assert (
+        cfg.confirmation.evidence.signed_proof.keyring_env == "AETHERYA_CONFIRMATION_HMAC_KEYRING"
+    )
+    assert cfg.confirmation.evidence.signed_proof.active_kid == "k2"
     assert cfg.confirmation.evidence.signed_proof.max_valid_for_sec == 600
     assert cfg.confirmation.evidence.signed_proof.clock_skew_sec == 3
+    assert cfg.confirmation.evidence.signed_proof.replay_mode == "idempotent"
 
 
 def test_capability_matrix_unknown_role_reference_raises(tmp_path):
@@ -500,8 +513,11 @@ def test_confirmation_signed_proof_param_conflict_and_empty_key_env_raise(tmp_pa
                     "enabled": True,
                     "proof_param": "confirm_token",
                     "key_env": "AETHERYA_CONFIRMATION_HMAC_KEY",
+                    "keyring_env": "AETHERYA_CONFIRMATION_HMAC_KEYRING",
+                    "active_kid": "k1",
                     "max_valid_for_sec": 600,
                     "clock_skew_sec": 1,
+                    "replay_mode": "single_use",
                 },
             },
         },
@@ -514,6 +530,28 @@ def test_confirmation_signed_proof_param_conflict_and_empty_key_env_raise(tmp_pa
 
     cfg_data["confirmation"]["evidence"]["signed_proof"]["proof_param"] = "confirm_proof"
     cfg_data["confirmation"]["evidence"]["signed_proof"]["key_env"] = ""
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError):
+        load_policy_config(path)
+
+    cfg_data["confirmation"]["evidence"]["signed_proof"][
+        "key_env"
+    ] = "AETHERYA_CONFIRMATION_HMAC_KEY"
+    cfg_data["confirmation"]["evidence"]["signed_proof"]["keyring_env"] = ""
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError):
+        load_policy_config(path)
+
+    cfg_data["confirmation"]["evidence"]["signed_proof"][
+        "keyring_env"
+    ] = "AETHERYA_CONFIRMATION_HMAC_KEYRING"
+    cfg_data["confirmation"]["evidence"]["signed_proof"]["active_kid"] = ""
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError):
+        load_policy_config(path)
+
+    cfg_data["confirmation"]["evidence"]["signed_proof"]["active_kid"] = "k1"
+    cfg_data["confirmation"]["evidence"]["signed_proof"]["replay_mode"] = "invalid"
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError):
         load_policy_config(path)
