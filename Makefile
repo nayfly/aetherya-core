@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve
 
 fmt:
 	ruff format src tests
@@ -42,3 +42,12 @@ openai_shadow_smoke:
 
 pre_api_gate:
 	python scripts/pre_api_gate.py
+
+api_serve:
+	python -m aetherya.api_server --host 127.0.0.1 --port 8080
+
+api_stop:
+	@echo "Liberando puerto 8080..."
+	-fuser -k 8080/tcp || true
+
+api_restart: api_stop api_serve

@@ -35,6 +35,16 @@ All notable changes to this project are documented in this file.
   - `scripts/pre_api_gate.py`
   - `make pre_api_gate`
   - validates actor spoofing fail-closed behavior, shadow timeout resilience, and audit chain integrity/tamper detection in one command.
+- Added native HTTP API stack (no extra runtime dependency):
+  - `aetherya.api` service layer with routes:
+    - `GET /health`
+    - `POST /v1/decide`
+    - `POST /v1/audit/verify`
+  - `aetherya.api_server` threaded HTTP server entrypoint (`aetherya-api`)
+  - browser dashboard for human operators (`GET /`, `GET /dashboard`)
+  - explicit `405 MethodNotAllowed` responses on POST-only routes when called via GET
+  - `make api_serve` convenience target
+  - end-to-end server tests + service-level contract tests
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.

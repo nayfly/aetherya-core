@@ -189,6 +189,47 @@ Note:
 - Wrapper subcommands forward arguments to the existing internal CLIs.
 - Use `--` before forwarded flags for maximum compatibility in shell automation.
 
+## HTTP API
+
+Run local API server:
+
+```bash
+make api_serve
+# or: aetherya-api --host 127.0.0.1 --port 8080
+```
+
+Open dashboard in browser:
+
+```bash
+http://127.0.0.1:8080/
+```
+
+Health check:
+
+```bash
+curl -s http://127.0.0.1:8080/health
+```
+
+Decision endpoint:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/decide \
+  -H "Content-Type: application/json" \
+  -d '{"raw_input":"help user","actor":"robert","wait_shadow":true}'
+```
+
+Audit verification endpoint:
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/audit/verify \
+  -H "Content-Type: application/json" \
+  -d '{"require_chain":true,"require_hmac":false}'
+```
+
+Notes:
+- `GET /` and `GET /dashboard` serve an interactive dashboard for non-CLI users.
+- `GET /v1/decide` and `GET /v1/audit/verify` return `405 MethodNotAllowed` (use `POST`).
+
 ## Running tests
 
 ```bash
