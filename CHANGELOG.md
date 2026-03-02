@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.6.0 - 2026-03-02
+
 ### Added
 - Added unified CLI entrypoint scaffold (`aetherya`) with initial `decide` command.
 - Added `aetherya decide` features:

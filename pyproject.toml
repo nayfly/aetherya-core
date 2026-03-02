@@ -64,7 +64,7 @@ redis = [
 
 [project]
 name = "aetherya-core"
-version = "0.3.0"
+version = "0.6.0"
 
 [project.scripts]
 aetherya = "aetherya.cli:main"

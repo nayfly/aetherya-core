@@ -3,7 +3,7 @@
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.5.0-informational)
+![Version](https://img.shields.io/badge/version-0.6.0-informational)
 
 A deterministic, risk-aware policy engine for evaluating actions under constitutional constraints and procedural safeguards.
 
@@ -146,7 +146,7 @@ Future-proof adapter layer for external context engines (LLM, vector DB, etc.) w
 - CI validated on every push
 - Dedicated `security_gate` CI job with release-time dependency (`release_readiness` on tags `v*`)
 - Audit traceability with deterministic `decision_id` + `context_hash`
-- Versioned baseline (`v0.5.0`)
+- Versioned baseline (`v0.6.0`)
 
 ## Installation
 
@@ -524,7 +524,7 @@ python -m aetherya.security_baseline --update-baseline
 
 ## Status
 
-`v0.5.0` – Stable security-hardened baseline with deterministic policy pipeline, explainability, release artifact attestation, and pipeline latency SLO gate.
+`v0.6.0` – Stable security-hardening release with Redis-backed replay protection and split decision/approvals service profiles, preserving deterministic policy enforcement.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release details.
 
