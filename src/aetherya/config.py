@@ -81,6 +81,9 @@ class ConfirmationSignedProofConfig:
     max_valid_for_sec: int = 900
     clock_skew_sec: int = 5
     replay_mode: str = "single_use"
+    replay_store: str = "memory"
+    replay_redis_url_env: str = "AETHERYA_CONFIRMATION_REPLAY_REDIS_URL"
+    replay_redis_prefix: str = "aetherya:appr"
 
 
 @dataclass(frozen=True)
@@ -276,6 +279,14 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
     max_valid_for_sec = int(signed_proof_raw.get("max_valid_for_sec", 900))
     clock_skew_sec = int(signed_proof_raw.get("clock_skew_sec", 5))
     replay_mode = str(signed_proof_raw.get("replay_mode", "single_use")).strip().lower()
+    replay_store = str(signed_proof_raw.get("replay_store", "memory")).strip().lower()
+    replay_redis_url_env = str(
+        signed_proof_raw.get(
+            "replay_redis_url_env",
+            "AETHERYA_CONFIRMATION_REPLAY_REDIS_URL",
+        )
+    ).strip()
+    replay_redis_prefix = str(signed_proof_raw.get("replay_redis_prefix", "aetherya:appr")).strip()
 
     if not proof_param:
         raise ValueError("confirmation.evidence.signed_proof.proof_param must be non-empty")
@@ -297,6 +308,16 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
         raise ValueError(
             "confirmation.evidence.signed_proof.replay_mode must be one of: single_use, idempotent"
         )
+    if replay_store not in {"memory", "redis"}:
+        raise ValueError(
+            "confirmation.evidence.signed_proof.replay_store must be one of: memory, redis"
+        )
+    if not replay_redis_url_env:
+        raise ValueError(
+            "confirmation.evidence.signed_proof.replay_redis_url_env must be non-empty"
+        )
+    if not replay_redis_prefix:
+        raise ValueError("confirmation.evidence.signed_proof.replay_redis_prefix must be non-empty")
 
     signed_proof = ConfirmationSignedProofConfig(
         enabled=bool(signed_proof_raw.get("enabled", False)),
@@ -307,6 +328,9 @@ def _load_confirmation(raw: dict[str, Any] | None) -> ConfirmationConfig:
         max_valid_for_sec=max_valid_for_sec,
         clock_skew_sec=clock_skew_sec,
         replay_mode=replay_mode,
+        replay_store=replay_store,
+        replay_redis_url_env=replay_redis_url_env,
+        replay_redis_prefix=replay_redis_prefix,
     )
 
     evidence = ConfirmationEvidenceConfig(

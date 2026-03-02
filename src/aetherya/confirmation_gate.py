@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
+import os
 import re
 import threading
 import time
-from typing import TypedDict
+from typing import Any, Protocol, TypedDict
 
 from aetherya.actions import ActionRequest
 from aetherya.approval_proof import (
@@ -26,6 +28,18 @@ class ConfirmationOutcome(TypedDict, total=False):
     proof_expires_at: int
     proof_scope_hash: str
     proof_kid: str
+
+
+class _ReplayStore(Protocol):
+    def check_and_mark(
+        self,
+        *,
+        kid: str,
+        nonce: str,
+        scope_hash: str,
+        expires_at: int,
+        replay_mode: str,
+    ) -> str: ...
 
 
 class _InMemoryReplayStore:
@@ -64,7 +78,102 @@ class _InMemoryReplayStore:
             return "replay_detected"
 
 
+class _RedisReplayStore:
+    def __init__(self, client: Any, *, prefix: str = "aetherya:appr") -> None:
+        self._client = client
+        self._prefix = prefix.strip() or "aetherya:appr"
+
+    def _decode_value(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return str(value)
+
+    def _ttl(self, *, expires_at: int, now: int) -> int:
+        ttl = int(expires_at) - int(now)
+        return ttl if ttl > 0 else 1
+
+    def check_and_mark(
+        self,
+        *,
+        kid: str,
+        nonce: str,
+        scope_hash: str,
+        expires_at: int,
+        replay_mode: str,
+    ) -> str:
+        now = int(time.time())
+        ttl = self._ttl(expires_at=int(expires_at), now=now)
+
+        if replay_mode == "single_use":
+            nonce_key = f"{self._prefix}:nonce:{kid}:{nonce}"
+            created = bool(
+                self._client.set(
+                    nonce_key,
+                    f"{scope_hash}|{expires_at}",
+                    nx=True,
+                    ex=ttl,
+                )
+            )
+            return "ok" if created else "replay_detected"
+
+        scope_key = f"{self._prefix}:scope:{scope_hash}"
+        scope_value = f"{kid}|{nonce}|{expires_at}"
+        created = bool(self._client.set(scope_key, scope_value, nx=True, ex=ttl))
+        if created:
+            return "ok"
+
+        existing = self._decode_value(self._client.get(scope_key))
+        chunks = existing.split("|")
+        if len(chunks) >= 2 and chunks[0] == kid and chunks[1] == nonce:
+            return "ok"
+        return "nonce_scope_mismatch"
+
+
 _REPLAY_STORE = _InMemoryReplayStore()
+_REPLAY_STORES: dict[str, _ReplayStore] = {}
+_REPLAY_STORES_LOCK = threading.Lock()
+
+
+def _redis_client_from_url(url: str) -> Any:
+    redis_module = importlib.import_module("redis")
+    from_url = getattr(redis_module, "from_url", None)
+    if callable(from_url):
+        return from_url(url, decode_responses=True)
+
+    redis_cls = getattr(redis_module, "Redis", None)
+    if redis_cls is None:
+        raise RuntimeError("redis module does not expose Redis client")
+    from_url_method = getattr(redis_cls, "from_url", None)
+    if not callable(from_url_method):
+        raise RuntimeError("redis client does not support from_url")
+    return from_url_method(url, decode_responses=True)
+
+
+def _replay_store_from_config(cfg: ConfirmationConfig) -> _ReplayStore:
+    signed_cfg = cfg.evidence.signed_proof
+    if not signed_cfg.enabled:
+        return _REPLAY_STORE
+    if signed_cfg.replay_store == "memory":
+        return _REPLAY_STORE
+
+    redis_url = os.getenv(signed_cfg.replay_redis_url_env, "").strip()
+    if not redis_url:
+        raise RuntimeError(
+            f"replay_store=redis but redis URL env is missing ({signed_cfg.replay_redis_url_env})"
+        )
+
+    cache_key = f"redis|{redis_url}|{signed_cfg.replay_redis_prefix}"
+    with _REPLAY_STORES_LOCK:
+        cached = _REPLAY_STORES.get(cache_key)
+        if cached is not None:
+            return cached
+
+        client = _redis_client_from_url(redis_url)
+        store = _RedisReplayStore(client, prefix=signed_cfg.replay_redis_prefix)
+        _REPLAY_STORES[cache_key] = store
+        return store
 
 
 class ConfirmationGate:
@@ -72,10 +181,10 @@ class ConfirmationGate:
         self,
         cfg: ConfirmationConfig,
         *,
-        replay_store: _InMemoryReplayStore | None = None,
+        replay_store: _ReplayStore | None = None,
     ) -> None:
         self.cfg = cfg
-        self.replay_store = replay_store or _REPLAY_STORE
+        self.replay_store = replay_store or _replay_store_from_config(cfg)
 
     def _requires_confirmation(self, action: ActionRequest, aggregate: RiskAggregate) -> bool:
         require = self.cfg.require_for

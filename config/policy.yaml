@@ -111,6 +111,9 @@ confirmation:
       max_valid_for_sec: 900
       clock_skew_sec: 5
       replay_mode: single_use
+      replay_store: memory
+      replay_redis_url_env: AETHERYA_CONFIRMATION_REPLAY_REDIS_URL
+      replay_redis_prefix: aetherya:appr
 
 llm_shadow:
   enabled: false

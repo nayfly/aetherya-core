@@ -33,6 +33,10 @@ class APISettings:
     audit_path: Path | None = Path("audit/decisions.jsonl")
     constitution_path: Path | None = None
     default_actor: str = "robert"
+    service_name: str = "aetherya-api"
+    enable_decide_routes: bool = True
+    enable_audit_routes: bool = True
+    enable_approval_routes: bool = True
     approval_admin_key_env: str = "AETHERYA_APPROVALS_API_KEY"
     approval_sign_local_only: bool = True
 
@@ -152,7 +156,7 @@ class AetheryaAPI:
                 503,
                 {
                     "ok": False,
-                    "service": "aetherya-api",
+                    "service": self.settings.service_name,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 },
@@ -162,7 +166,7 @@ class AetheryaAPI:
             200,
             {
                 "ok": True,
-                "service": "aetherya-api",
+                "service": self.settings.service_name,
                 "policy_path": str(self.settings.policy_path),
                 "policy_fingerprint": cfg.policy_fingerprint,
                 "audit_path": str(self.settings.audit_path) if self.settings.audit_path else None,
@@ -480,6 +484,15 @@ class AetheryaAPI:
         if method == "GET" and path == "/health":
             return self.health()
         if path == "/v1/decide":
+            if not self.settings.enable_decide_routes:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"route not found: {method} {path}",
+                    },
+                )
             if method == "POST":
                 return self.decide(payload)
             return (
@@ -492,6 +505,15 @@ class AetheryaAPI:
                 },
             )
         if path == "/v1/audit/verify":
+            if not self.settings.enable_audit_routes:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"route not found: {method} {path}",
+                    },
+                )
             if method == "POST":
                 return self.audit_verify(payload)
             return (
@@ -504,6 +526,15 @@ class AetheryaAPI:
                 },
             )
         if path == "/v1/confirmation/sign":
+            if not self.settings.enable_approval_routes:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"route not found: {method} {path}",
+                    },
+                )
             if method == "POST":
                 return self.confirmation_sign(payload, headers=headers, client_ip=client_ip)
             return (
@@ -516,6 +547,15 @@ class AetheryaAPI:
                 },
             )
         if path == "/v1/confirmation/verify":
+            if not self.settings.enable_approval_routes:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"route not found: {method} {path}",
+                    },
+                )
             if method == "POST":
                 return self.confirmation_verify(payload, headers=headers, client_ip=client_ip)
             return (

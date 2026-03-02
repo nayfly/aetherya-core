@@ -493,12 +493,20 @@ def serve_api(
     constitution_path: Path | None,
     default_actor: str,
     max_body_bytes: int,
+    service_name: str = "aetherya-api",
+    enable_decide_routes: bool = True,
+    enable_audit_routes: bool = True,
+    enable_approval_routes: bool = True,
 ) -> None:
     settings = APISettings(
         policy_path=policy_path,
         audit_path=audit_path,
         constitution_path=constitution_path,
         default_actor=default_actor,
+        service_name=service_name,
+        enable_decide_routes=enable_decide_routes,
+        enable_audit_routes=enable_audit_routes,
+        enable_approval_routes=enable_approval_routes,
     )
     api = AetheryaAPI(settings)
     server = build_server(
@@ -522,6 +530,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--constitution-path", default=None)
     parser.add_argument("--default-actor", default="robert")
     parser.add_argument("--max-body-bytes", type=int, default=1_048_576)
+    parser.add_argument(
+        "--service-mode",
+        choices=["all", "decision", "approvals"],
+        default="all",
+        help="Route profile: all, decision-only, or approvals-only.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -529,6 +543,16 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("port must be between 1 and 65535")
         if args.max_body_bytes <= 0:
             raise ValueError("max-body-bytes must be > 0")
+
+        mode = str(args.service_mode).strip().lower()
+        service_name = {
+            "all": "aetherya-api",
+            "decision": "aetherya-decision",
+            "approvals": "aetherya-approvals",
+        }[mode]
+        enable_decide_routes = mode in {"all", "decision"}
+        enable_audit_routes = mode in {"all", "decision"}
+        enable_approval_routes = mode in {"all", "approvals"}
 
         serve_api(
             host=str(args.host),
@@ -538,6 +562,10 @@ def main(argv: list[str] | None = None) -> int:
             constitution_path=Path(str(args.constitution_path)) if args.constitution_path else None,
             default_actor=str(args.default_actor),
             max_body_bytes=int(args.max_body_bytes),
+            service_name=service_name,
+            enable_decide_routes=enable_decide_routes,
+            enable_audit_routes=enable_audit_routes,
+            enable_approval_routes=enable_approval_routes,
         )
         return 0
     except KeyboardInterrupt:

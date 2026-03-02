@@ -160,6 +160,12 @@ Optional OpenAI shadow integration:
 pip install -e ".[dev,llm]"
 ```
 
+Optional Redis replay-store integration:
+
+```bash
+pip install -e ".[dev,redis]"
+```
+
 ## CLI
 
 Evaluate one input through the deterministic pipeline:
@@ -207,6 +213,8 @@ Key rotation and replay controls are policy-driven via `confirmation.evidence.si
 - `active_kid` (current signing key id)
 - `keyring_env` (kid->secret keyring)
 - `replay_mode` (`single_use` / `idempotent`)
+- `replay_store` (`memory` / `redis`)
+- `replay_redis_url_env` + `replay_redis_prefix` (centralized anti-replay keys)
 
 Unified wrappers over existing module CLIs:
 
@@ -227,11 +235,23 @@ Note:
 
 ## HTTP API
 
-Run local API server:
+Run local API server (all routes, compatibility mode):
 
 ```bash
 make api_serve
-# or: aetherya-api --host 127.0.0.1 --port 8080
+# or: aetherya-api --service-mode all --host 127.0.0.1 --port 8080
+```
+
+Run split services (recommended for production hardening):
+
+```bash
+# Decision service: /health, /v1/decide, /v1/audit/verify
+make api_decision_serve
+# or: aetherya-decision-server --host 127.0.0.1 --port 8080
+
+# Approvals service: /health, /v1/confirmation/sign, /v1/confirmation/verify
+make api_approvals_serve
+# or: aetherya-approvals-server --host 127.0.0.1 --port 8081
 ```
 
 Open dashboard in browser:
@@ -287,6 +307,13 @@ Notes:
 - `POST /v1/confirmation/sign` and `POST /v1/confirmation/verify` require:
   - `X-AETHERYA-Admin-Key` matching `AETHERYA_APPROVALS_API_KEY`
   - localhost caller by default (`127.0.0.1` / `::1`)
+- In split mode, run signing secrets only in approvals process:
+  - decision service: no `AETHERYA_CONFIRMATION_HMAC_KEY*`
+  - approvals service: has signing keyring + admin key
+- Redis-backed replay protection (multi-process safe):
+  - set `confirmation.evidence.signed_proof.replay_store: redis`
+  - export `AETHERYA_CONFIRMATION_REPLAY_REDIS_URL`
+  - single-use key: `aetherya:appr:nonce:<kid>:<nonce>`
 
 ## Running tests
 

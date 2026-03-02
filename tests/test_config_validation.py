@@ -178,6 +178,12 @@ def test_confirmation_defaults_when_missing(tmp_path):
     )
     assert cfg.confirmation.evidence.signed_proof.active_kid == "k1"
     assert cfg.confirmation.evidence.signed_proof.replay_mode == "single_use"
+    assert cfg.confirmation.evidence.signed_proof.replay_store == "memory"
+    assert (
+        cfg.confirmation.evidence.signed_proof.replay_redis_url_env
+        == "AETHERYA_CONFIRMATION_REPLAY_REDIS_URL"
+    )
+    assert cfg.confirmation.evidence.signed_proof.replay_redis_prefix == "aetherya:appr"
 
 
 def test_confirmation_parsing(tmp_path):
@@ -214,6 +220,9 @@ def test_confirmation_parsing(tmp_path):
                     "max_valid_for_sec": 600,
                     "clock_skew_sec": 3,
                     "replay_mode": "idempotent",
+                    "replay_store": "redis",
+                    "replay_redis_url_env": "AETHERYA_TEST_REPLAY_URL",
+                    "replay_redis_prefix": "aetherya:test:replay",
                 },
             },
         },
@@ -237,6 +246,9 @@ def test_confirmation_parsing(tmp_path):
     assert cfg.confirmation.evidence.signed_proof.max_valid_for_sec == 600
     assert cfg.confirmation.evidence.signed_proof.clock_skew_sec == 3
     assert cfg.confirmation.evidence.signed_proof.replay_mode == "idempotent"
+    assert cfg.confirmation.evidence.signed_proof.replay_store == "redis"
+    assert cfg.confirmation.evidence.signed_proof.replay_redis_url_env == "AETHERYA_TEST_REPLAY_URL"
+    assert cfg.confirmation.evidence.signed_proof.replay_redis_prefix == "aetherya:test:replay"
 
 
 def test_capability_matrix_unknown_role_reference_raises(tmp_path):
@@ -550,6 +562,24 @@ def test_confirmation_signed_proof_param_conflict_and_empty_key_env_raise(tmp_pa
 
     signed_proof["active_kid"] = "k1"
     signed_proof["replay_mode"] = "invalid"
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError):
+        load_policy_config(path)
+
+    signed_proof["replay_mode"] = "single_use"
+    signed_proof["replay_store"] = "bad-store"
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError):
+        load_policy_config(path)
+
+    signed_proof["replay_store"] = "redis"
+    signed_proof["replay_redis_url_env"] = ""
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError):
+        load_policy_config(path)
+
+    signed_proof["replay_redis_url_env"] = "AETHERYA_CONFIRMATION_REPLAY_REDIS_URL"
+    signed_proof["replay_redis_prefix"] = ""
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError):
         load_policy_config(path)

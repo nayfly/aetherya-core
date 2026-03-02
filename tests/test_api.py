@@ -330,6 +330,89 @@ def test_api_dispatch_method_not_allowed_for_post_routes(tmp_path: Path) -> None
     assert payload_proof_verify["allowed_methods"] == ["POST"]
 
 
+def test_api_decision_profile_hides_approval_routes(tmp_path: Path) -> None:
+    policy_path = _write_policy(tmp_path, lambda data: None)
+    api = AetheryaAPI(
+        APISettings(
+            policy_path=policy_path,
+            audit_path=tmp_path / "decisions.jsonl",
+            service_name="aetherya-decision",
+            enable_decide_routes=True,
+            enable_audit_routes=True,
+            enable_approval_routes=False,
+        )
+    )
+
+    health_status, health_payload = api.health()
+    assert health_status == 200
+    assert health_payload["service"] == "aetherya-decision"
+
+    decide_status, _ = api.dispatch("POST", "/v1/decide", {"raw_input": "help user"})
+    assert decide_status == 200
+
+    audit_status, _ = api.dispatch("POST", "/v1/audit/verify", {"require_chain": False})
+    assert audit_status == 200
+
+    sign_status, sign_payload = api.dispatch("POST", "/v1/confirmation/sign", {})
+    assert sign_status == 404
+    assert sign_payload["error_type"] == "NotFound"
+
+    verify_status, verify_payload = api.dispatch("POST", "/v1/confirmation/verify", {})
+    assert verify_status == 404
+    assert verify_payload["error_type"] == "NotFound"
+
+
+def test_api_approvals_profile_hides_decide_and_audit_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy_path = _write_policy(
+        tmp_path,
+        lambda data: data["confirmation"]["evidence"]["signed_proof"].update(
+            {"enabled": True, "key_env": "AETHERYA_TEST_APPROVALS_PROFILE_KEY"}
+        ),
+    )
+    monkeypatch.setenv("AETHERYA_TEST_APPROVALS_PROFILE_KEY", "approval-profile-key")
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-secret")
+
+    api = AetheryaAPI(
+        APISettings(
+            policy_path=policy_path,
+            audit_path=tmp_path / "decisions.jsonl",
+            service_name="aetherya-approvals",
+            enable_decide_routes=False,
+            enable_audit_routes=False,
+            enable_approval_routes=True,
+        )
+    )
+
+    health_status, health_payload = api.health()
+    assert health_status == 200
+    assert health_payload["service"] == "aetherya-approvals"
+
+    decide_status, decide_payload = api.dispatch("POST", "/v1/decide", {"raw_input": "help user"})
+    assert decide_status == 404
+    assert decide_payload["error_type"] == "NotFound"
+
+    audit_status, audit_payload = api.dispatch("POST", "/v1/audit/verify", {"require_chain": False})
+    assert audit_status == 404
+    assert audit_payload["error_type"] == "NotFound"
+
+    raw = (
+        "mode:operative tool:filesystem target:/tmp param.path=/tmp/a "
+        "param.operation=write param.confirm_token=ack:abc12345 "
+        "param.confirm_context=approved_by_operator"
+    )
+    sign_status, sign_payload = api.dispatch(
+        "POST",
+        "/v1/confirmation/sign",
+        {"raw_input": raw, "actor": "robert", "expires_in_sec": 30, "now_ts": 1700000000},
+        headers={"X-AETHERYA-Admin-Key": "admin-secret"},
+        client_ip="127.0.0.1",
+    )
+    assert sign_status == 200
+    assert sign_payload["ok"] is True
+
+
 def test_api_confirmation_sign_and_verify_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

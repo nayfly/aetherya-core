@@ -333,6 +333,26 @@ def test_api_server_main_argument_and_error_paths(
     assert captured["audit_path"] is None
     assert captured["constitution_path"] is None
     assert captured["max_body_bytes"] == 1024
+    assert captured["service_name"] == "aetherya-api"
+    assert captured["enable_decide_routes"] is True
+    assert captured["enable_audit_routes"] is True
+    assert captured["enable_approval_routes"] is True
+
+    captured.clear()
+    status_decision = main(["--service-mode", "decision"])
+    assert status_decision == 0
+    assert captured["service_name"] == "aetherya-decision"
+    assert captured["enable_decide_routes"] is True
+    assert captured["enable_audit_routes"] is True
+    assert captured["enable_approval_routes"] is False
+
+    captured.clear()
+    status_approvals = main(["--service-mode", "approvals"])
+    assert status_approvals == 0
+    assert captured["service_name"] == "aetherya-approvals"
+    assert captured["enable_decide_routes"] is False
+    assert captured["enable_audit_routes"] is False
+    assert captured["enable_approval_routes"] is True
 
     status_bad_port = main(["--port", "0"])
     assert status_bad_port == 1
@@ -355,3 +375,36 @@ def test_api_server_main_argument_and_error_paths(
 
     monkeypatch.setattr(api_server, "serve_api", ctrl_c)
     assert main([]) == 0
+
+
+def test_split_server_wrappers_delegate_service_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aetherya.api_server as api_server
+    import aetherya.approvals_server as approvals_server
+    import aetherya.decision_server as decision_server
+
+    captured_argv: list[str] = []
+
+    def fake_main(argv):  # noqa: ANN001, ANN202
+        captured_argv[:] = list(argv)
+        return 0
+
+    monkeypatch.setattr(api_server, "main", fake_main)
+
+    assert decision_server.main([]) == 0
+    assert captured_argv[:2] == ["--service-mode", "decision"]
+    assert decision_server.main(["--port", "19090"]) == 0
+    assert captured_argv[:4] == ["--service-mode", "decision", "--port", "19090"]
+
+    assert approvals_server.main([]) == 0
+    assert captured_argv[:4] == ["--service-mode", "approvals", "--port", "8081"]
+    assert approvals_server.main(["--host", "0.0.0.0"]) == 0
+    assert captured_argv[:6] == [
+        "--service-mode",
+        "approvals",
+        "--port",
+        "8081",
+        "--host",
+        "0.0.0.0",
+    ]

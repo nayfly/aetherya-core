@@ -61,10 +61,24 @@ All notable changes to this project are documented in this file.
   - in-memory TTL nonce store
   - `single_use` and `idempotent` modes
   - deterministic replay-rejection reasons/tags in decision trace
+- Added Redis-backed replay store option for signed confirmation proofs:
+  - policy flag: `confirmation.evidence.signed_proof.replay_store` (`memory`/`redis`)
+  - env-configurable Redis endpoint and key namespace:
+    - `replay_redis_url_env`
+    - `replay_redis_prefix`
+  - atomic anti-replay writes with `SET NX EX`
+  - centralized replay protection across processes/workers
+  - optional dependency group: `redis` (`pip install -e ".[redis]"`)
 - Added admin-protected confirmation API routes:
   - `POST /v1/confirmation/sign`
   - `POST /v1/confirmation/verify`
   - localhost-only by default + `X-AETHERYA-Admin-Key` check (`AETHERYA_APPROVALS_API_KEY`)
+- Added API route-profile split for physical separation of decision and approvals surfaces:
+  - `--service-mode all|decision|approvals`
+  - new entrypoints:
+    - `aetherya-decision-server`
+    - `aetherya-approvals-server`
+  - route exposure is now explicit per process profile.
 
 ### Changed
 - `run_pipeline` now selects `llm_shadow` provider from policy config and records `provider_configured` in audit context.

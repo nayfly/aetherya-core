@@ -58,6 +58,9 @@ dev = [
 llm = [
   "openai>=1.0.0",
 ]
+redis = [
+  "redis>=5.0.0",
+]
 
 [project]
 name = "aetherya-core"
@@ -66,3 +69,5 @@ version = "0.3.0"
 [project.scripts]
 aetherya = "aetherya.cli:main"
 aetherya-api = "aetherya.api_server:main"
+aetherya-decision-server = "aetherya.decision_server:main"
+aetherya-approvals-server = "aetherya.approvals_server:main"

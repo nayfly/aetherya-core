@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve api_decision_serve api_approvals_serve
 
 fmt:
 	ruff format src tests
@@ -46,8 +46,15 @@ pre_api_gate:
 api_serve:
 	python -m aetherya.api_server --host 127.0.0.1 --port 8080
 
+api_decision_serve:
+	python -m aetherya.api_server --service-mode decision --host 127.0.0.1 --port 8080
+
+api_approvals_serve:
+	python -m aetherya.api_server --service-mode approvals --host 127.0.0.1 --port 8081
+
 api_stop:
 	@echo "Liberando puerto 8080..."
 	-fuser -k 8080/tcp || true
+	-fuser -k 8081/tcp || true
 
 api_restart: api_stop api_serve
