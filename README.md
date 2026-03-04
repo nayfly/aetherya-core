@@ -9,6 +9,48 @@ A deterministic, risk-aware policy engine for evaluating actions under constitut
 
 Designed for reproducibility, auditability, and strict typing.
 
+LLMs can propose actions.  
+ÆTHERYA enforces that sensitive actions are not executed directly without deterministic policy checks, strong confirmation, and verifiable audit traces.
+
+---
+
+## Problem in One Line
+
+Without a control kernel, agent runtimes often become:
+- `LLM -> tool call -> irreversible action`
+
+ÆTHERYA inserts a deterministic decision boundary:
+- `LLM -> policy/gates/confirmation -> allow|deny|escalate -> execution`
+
+This repository is:
+- A deterministic policy kernel for action governance
+- A verifiable audit layer (`decision_id`, `context_hash`, chain integrity)
+- A fail-closed safety boundary for agent tool execution
+
+This repository is not:
+- An LLM serving stack
+- A replacement for your agent runtime/orchestrator
+- A business workflow engine
+
+---
+
+## Quickstart (60s)
+
+```bash
+pip install -e ".[dev]"
+
+# deterministic decision
+aetherya decide "help user safely" --actor robert --json
+
+# verify audit-chain integrity
+python -m aetherya.audit_verify --audit-path audit/decisions.jsonl --require-chain --json
+```
+
+Expected behavior:
+- deterministic decision contract (`allowed`, `state`, `reason`, `risk_score`)
+- audit event written with stable identity fields
+- `audit_verify --require-chain` returns a valid chain
+
 ---
 
 ## Why
@@ -69,6 +111,21 @@ Deterministic runtime order:
 
 Fail-closed guarantee:
 - Any exception in parser/contracts/gates/constitution/aggregation/confirmation/decision contract returns `fail_closed:*` with `allowed=false`.
+
+## Threat Model (Blue Team / Red Team)
+
+In scope:
+- Prompt injection and jailbreak attempts targeting tool execution
+- Unauthorized irreversible operations (delete/write/transfer-like flows)
+- Confirmation proof replay attempts
+- Audit tampering/reordering attempts
+- Runtime component failures (handled as fail-closed)
+
+Out of scope:
+- Full host compromise (kernel/root takeover)
+- Secret exfiltration outside process boundaries
+- Compromised external providers (LLM/API vendor side)
+- Human admin account takeover
 
 ## Core Components
 
@@ -195,6 +252,8 @@ aetherya decide "help user" --candidate-response "you are an idiot" --json
 Generate and use an out-of-band signed confirmation proof (HMAC + expiry):
 
 ```bash
+# default config ships with signed_proof.enabled=false
+# enable confirmation.evidence.signed_proof.enabled=true in your policy before enforcing proofs
 export AETHERYA_CONFIRMATION_HMAC_KEY="replace-with-long-random-secret"
 
 aetherya confirmation sign \
@@ -233,9 +292,89 @@ Note:
 - Wrapper subcommands forward arguments to the existing internal CLIs.
 - Use `--` before forwarded flags for maximum compatibility in shell automation.
 
+## 90s Approval Demo (DENY -> ALLOW -> REPLAY DENY)
+
+Prerequisites:
+- Redis running locally (`redis://127.0.0.1:6379/0`)
+- `pip install -e ".[dev,redis]"`
+
+```bash
+export AETHERYA_CONFIRMATION_HMAC_KEY="demo-key-v06"
+export AETHERYA_CONFIRMATION_REPLAY_REDIS_URL="redis://127.0.0.1:6379/0"
+
+POLICY=/tmp/policy_demo_v06.yaml
+AUDIT=/tmp/aetherya_demo_v06.jsonl
+RAW='mode:operative tool:filesystem target:/tmp param.path=/tmp/demo.txt param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator'
+
+python - <<'PY'
+from pathlib import Path
+import yaml
+data = yaml.safe_load(Path("config/policy.yaml").read_text())
+sp = data["confirmation"]["evidence"]["signed_proof"]
+sp["enabled"] = True
+sp["replay_store"] = "redis"
+sp["replay_redis_url_env"] = "AETHERYA_CONFIRMATION_REPLAY_REDIS_URL"
+sp["replay_redis_prefix"] = "aetherya:appr"
+Path("/tmp/policy_demo_v06.yaml").write_text(yaml.safe_dump(data, sort_keys=False))
+PY
+
+# 1) no proof -> DENY
+aetherya decide "$RAW" --actor robert --policy-path "$POLICY" --audit-path "$AUDIT" --json | python -c 'import sys,json; d=json.load(sys.stdin); print("1)", d["decision"]["allowed"], d["decision"]["state"])'
+
+# 2) sign
+SIGN="$(aetherya confirmation sign "$RAW" --actor robert --policy-path "$POLICY" --expires-in-sec 60 --json)"
+PROOF="$(printf '%s' "$SIGN" | python -c 'import sys,json; print(json.load(sys.stdin)["approval_proof"])')"
+
+# 3) with proof -> ALLOW
+aetherya decide "$RAW param.confirm_proof=$PROOF" --actor robert --policy-path "$POLICY" --audit-path "$AUDIT" --json | python -c 'import sys,json; d=json.load(sys.stdin); print("3)", d["decision"]["allowed"], d["decision"]["state"])'
+
+# 4) replay -> DENY
+aetherya decide "$RAW param.confirm_proof=$PROOF" --actor robert --policy-path "$POLICY" --audit-path "$AUDIT" --json | python -c 'import sys,json; d=json.load(sys.stdin); print("4)", d["decision"]["allowed"], d["decision"]["state"], "-", d["decision"]["reason"])'
+
+# 5) audit chain
+python -m aetherya.audit_verify --audit-path "$AUDIT" --require-chain --json | python -c 'import sys,json; d=json.load(sys.stdin); print("5)", "AUDIT OK" if d["invalid"]==0 else "AUDIT FAIL")'
+```
+
+## Minimal Agent Integration (Python)
+
+```python
+from pathlib import Path
+
+from aetherya.api import APISettings, AetheryaAPI
+
+api = AetheryaAPI(
+    APISettings(
+        policy_path=Path("config/policy.yaml"),
+        audit_path=Path("audit/decisions.jsonl"),
+        default_actor="robert",
+    )
+)
+
+status, payload = api.decide(
+    {
+        "raw_input": "mode:operative tool:filesystem target:/tmp param.path=/tmp/demo.txt param.operation=write",
+        "actor": "robert",
+        "wait_shadow": False,
+    }
+)
+
+decision = payload.get("decision", {})
+if status == 200 and decision.get("allowed"):
+    # Execute your tool here
+    pass
+else:
+    # Escalate, ask for confirmation, or return safe fallback
+    pass
+```
+
 ## HTTP API
 
-Run local API server (all routes, compatibility mode):
+Service modes:
+- `all` (single process): decide + audit + approvals routes on one port
+- `decision` (split): `/health`, `/v1/decide`, `/v1/audit/verify`
+- `approvals` (split): `/health`, `/v1/confirmation/sign`, `/v1/confirmation/verify`
+
+Run compatibility mode (`all`):
 
 ```bash
 make api_serve
@@ -275,10 +414,13 @@ curl -s -X POST http://127.0.0.1:8080/v1/decide \
 ```
 
 Admin-only confirmation signing endpoint (localhost + admin key header):
+- `all` mode URL: `http://127.0.0.1:8080/v1/confirmation/sign`
+- `split` mode URL: `http://127.0.0.1:8081/v1/confirmation/sign`
 
 ```bash
 export AETHERYA_APPROVALS_API_KEY="replace-with-admin-key"
-curl -s -X POST http://127.0.0.1:8080/v1/confirmation/sign \
+APPROVALS_URL="http://127.0.0.1:8081"
+curl -s -X POST "${APPROVALS_URL}/v1/confirmation/sign" \
   -H "Content-Type: application/json" \
   -H "X-AETHERYA-Admin-Key: ${AETHERYA_APPROVALS_API_KEY}" \
   -d '{"raw_input":"mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator","actor":"robert","expires_in_sec":60}'
@@ -287,7 +429,7 @@ curl -s -X POST http://127.0.0.1:8080/v1/confirmation/sign \
 Admin-only proof verification endpoint:
 
 ```bash
-curl -s -X POST http://127.0.0.1:8080/v1/confirmation/verify \
+curl -s -X POST "${APPROVALS_URL}/v1/confirmation/verify" \
   -H "Content-Type: application/json" \
   -H "X-AETHERYA-Admin-Key: ${AETHERYA_APPROVALS_API_KEY}" \
   -d '{"raw_input":"mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator","actor":"robert","approval_proof":"<approval_proof>"}'
