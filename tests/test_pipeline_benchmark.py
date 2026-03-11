@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -69,6 +70,69 @@ def test_run_pipeline_benchmark_fails_when_evaluation_count_mismatches(
     )
     assert result.passed is False
     assert result.evaluations == 0
+
+
+def test_run_pipeline_benchmark_semantic_warmup_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Warmup calls fire when use_semantic=True but are excluded from latency samples."""
+    call_log: list[str] = []
+    original_run = pipeline_benchmark.run_pipeline
+
+    def counting_run(text: str, **kwargs: Any) -> Any:
+        call_log.append(text)
+        return original_run(text, **kwargs)
+
+    # Patch constitution so no model download is triggered
+    original_make = pipeline_benchmark._make_constitution  # noqa: SLF001
+
+    def fast_constitution(use_semantic: bool = False) -> Any:
+        return original_make(use_semantic=False)
+
+    monkeypatch.setattr(pipeline_benchmark, "run_pipeline", counting_run)
+    monkeypatch.setattr(pipeline_benchmark, "_make_constitution", fast_constitution)
+
+    corpus_size = 5
+    result = pipeline_benchmark.run_pipeline_benchmark(
+        runs=1,
+        corpus_size=corpus_size,
+        seed=1337,
+        p95_max_ms=100.0,
+        p99_max_ms=120.0,
+        use_semantic=True,
+    )
+
+    # _WARMUP_RUNS warmup calls + corpus_size measured calls
+    assert len(call_log) == pipeline_benchmark._WARMUP_RUNS + corpus_size  # noqa: SLF001
+    # Only the corpus_size calls end up in samples
+    assert result.evaluations == corpus_size
+
+
+def test_run_pipeline_benchmark_no_warmup_when_use_semantic_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No warmup calls are made when use_semantic=False."""
+    call_log: list[str] = []
+    original_run = pipeline_benchmark.run_pipeline
+
+    def counting_run(text: str, **kwargs: Any) -> Any:
+        call_log.append(text)
+        return original_run(text, **kwargs)
+
+    monkeypatch.setattr(pipeline_benchmark, "run_pipeline", counting_run)
+
+    corpus_size = 5
+    result = pipeline_benchmark.run_pipeline_benchmark(
+        runs=1,
+        corpus_size=corpus_size,
+        seed=1337,
+        p95_max_ms=100.0,
+        p99_max_ms=120.0,
+        use_semantic=False,
+    )
+
+    assert len(call_log) == corpus_size
+    assert result.evaluations == corpus_size
 
 
 def test_run_pipeline_benchmark_rejects_invalid_parameters() -> None:

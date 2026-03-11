@@ -56,6 +56,9 @@ def _round4(value: float) -> float:
     return round(float(value), 4)
 
 
+_WARMUP_RUNS: int = 3
+
+
 def _make_constitution(use_semantic: bool = False) -> Constitution:
     return Constitution(
         [
@@ -164,6 +167,12 @@ def run_pipeline_benchmark(
     cfg = load_policy_config(policy_path)
     constitution = _make_constitution(use_semantic=use_semantic)
     corpus = _build_input_corpus(corpus_size, seed)
+
+    # Warmup: trigger lazy model loading and JIT stabilisation before measurement.
+    # Only relevant for the semantic path; fast-path constitution skips this cheaply.
+    if use_semantic and corpus:
+        for warmup_text in [corpus[i % len(corpus)] for i in range(_WARMUP_RUNS)]:
+            run_pipeline(warmup_text, constitution=constitution, actor=actor, cfg=cfg)
 
     samples: list[PipelineLatencySample] = []
     latencies: list[float] = []
