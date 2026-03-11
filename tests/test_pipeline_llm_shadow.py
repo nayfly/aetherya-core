@@ -340,34 +340,18 @@ def test_call_with_timeout_zero_or_negative_runs_inline() -> None:
     assert called["value"] is True
 
 
-def test_call_with_timeout_raises_when_worker_sets_no_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_call_with_timeout_propagates_callback_exception() -> None:
     import aetherya.pipeline as pipeline
 
-    class DummyEvent:
-        def wait(self, timeout: float | None = None) -> None:  # noqa: ARG002
-            return None
+    class SentinelError(Exception):
+        pass
 
-        def is_set(self) -> bool:
-            return True
+    def bad_callback() -> None:
+        raise SentinelError("callback failed")
 
-        def set(self) -> None:
-            return None
-
-    class DummyThread:
-        def __init__(self, target, daemon: bool):  # noqa: ANN001, ARG002
-            self._target = target
-
-        def start(self) -> None:
-            return None
-
-    monkeypatch.setattr(pipeline.threading, "Event", DummyEvent)
-    monkeypatch.setattr(pipeline.threading, "Thread", DummyThread)
-
-    with pytest.raises(RuntimeError, match="llm_shadow returned no response"):
+    with pytest.raises(SentinelError, match="callback failed"):
         pipeline._call_with_timeout(  # noqa: SLF001
-            callback=lambda: "ignored",
-            timeout_sec=0.1,
+            callback=bad_callback,
+            timeout_sec=1.0,
             timeout_label="llm_shadow",
         )

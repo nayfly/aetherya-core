@@ -56,7 +56,7 @@ def _round4(value: float) -> float:
     return round(float(value), 4)
 
 
-def _make_constitution() -> Constitution:
+def _make_constitution(use_semantic: bool = False) -> Constitution:
     return Constitution(
         [
             Principle(
@@ -87,7 +87,8 @@ def _make_constitution() -> Constitution:
                 keywords=["rm -rf /", "mkfs", "drop table"],
                 risk=92,
             ),
-        ]
+        ],
+        use_semantic=use_semantic,
     )
 
 
@@ -149,6 +150,7 @@ def run_pipeline_benchmark(
     p99_max_ms: float = 15.0,
     actor: str = "robert",
     policy_path: str | Path = "config/policy.yaml",
+    use_semantic: bool = False,
 ) -> PipelineBenchmarkResult:
     if runs <= 0:
         raise ValueError("runs must be > 0")
@@ -160,7 +162,7 @@ def run_pipeline_benchmark(
         raise ValueError("p99_max_ms must be > 0")
 
     cfg = load_policy_config(policy_path)
-    constitution = _make_constitution()
+    constitution = _make_constitution(use_semantic=use_semantic)
     corpus = _build_input_corpus(corpus_size, seed)
 
     samples: list[PipelineLatencySample] = []
@@ -227,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--actor", default="robert", help="Actor used in benchmark runs.")
     parser.add_argument("--policy-path", default="config/policy.yaml", help="Policy config path.")
     parser.add_argument(
+        "--use-semantic",
+        action="store_true",
+        default=False,
+        help="Enable semantic evaluator (semantic_path SLO: p95 ≤ 150ms).",
+    )
+    parser.add_argument(
         "--output",
         default="audit/pipeline/pipeline_benchmark_metrics.json",
         help="JSON output path.",
@@ -243,6 +251,7 @@ def main(argv: list[str] | None = None) -> int:
             p99_max_ms=args.p99_max_ms,
             actor=args.actor,
             policy_path=args.policy_path,
+            use_semantic=args.use_semantic,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

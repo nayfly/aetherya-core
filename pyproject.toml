@@ -34,6 +34,9 @@ packages = ["aetherya"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "slow: marks tests as slow (requires model download, use --run-slow to include)",
+]
 
 [tool.coverage.run]
 branch = true
@@ -65,9 +68,17 @@ redis = [
 [project]
 name = "aetherya-core"
 version = "0.6.0"
+dependencies = [
+  "sentence-transformers>=2.7.0",
+  "numpy>=1.26.0",
+]
 
 [project.scripts]
 aetherya = "aetherya.cli:main"
 aetherya-api = "aetherya.api_server:main"
 aetherya-decision-server = "aetherya.decision_server:main"
 aetherya-approvals-server = "aetherya.approvals_server:main"
+
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*", "sentence_transformers", "sentence_transformers.*"]
+ignore_missing_imports = true

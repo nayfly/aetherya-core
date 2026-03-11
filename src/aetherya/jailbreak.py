@@ -42,6 +42,88 @@ class JailbreakGuard:
             re.compile(r"\b(do anything now|no rules|without restrictions|unfiltered)\b"),
             "policy_override",
         ),
+        # Paraphrase: "set aside / overlook / discard ... instructions/rules/guidelines"
+        (
+            re.compile(
+                r"\b(set aside|overlook|discard)\b.{0,50}"
+                r"\b(instructions|rules|guidelines|safety|constraints)\b"
+            ),
+            "ignore_instructions_paraphrase",
+        ),
+        # Paraphrase: "pay no attention to ... rules/instructions"
+        (
+            re.compile(
+                r"\bpay no attention to\b.{0,50}" r"\b(instructions|rules|guidelines|safety)\b"
+            ),
+            "ignore_instructions_paraphrase",
+        ),
+        # Paraphrase: "pretend ... no rules" / "forget ... guidelines"
+        (
+            re.compile(r"\bpretend\b.{0,50}\bno rules\b"),
+            "ignore_instructions_paraphrase",
+        ),
+        (
+            re.compile(r"\bforget\b.{0,50}\bguidelines\b"),
+            "ignore_instructions_paraphrase",
+        ),
+        # Role override paraphrases
+        (
+            re.compile(r"\bpretend you are\b"),
+            "role_override_paraphrase",
+        ),
+        (
+            re.compile(r"\bact as if you were\b"),
+            "role_override_paraphrase",
+        ),
+        (
+            re.compile(r"\bsimulate being\b"),
+            "role_override_paraphrase",
+        ),
+        (
+            re.compile(r"\broleplay as\b.{0,40}\bunrestricted\b"),
+            "role_override_paraphrase",
+        ),
+        (
+            re.compile(r"\byou are now\b"),
+            "role_override_paraphrase",
+        ),
+        # Policy override paraphrases
+        (
+            re.compile(
+                r"\brespond without\b.{0,50}"
+                r"\b(restrictions|filters|guidelines|safety|limitations)\b"
+            ),
+            "policy_override_paraphrase",
+        ),
+        (
+            re.compile(r"\banswer freely\b"),
+            "policy_override_paraphrase",
+        ),
+        (
+            re.compile(r"\bno limitations\b"),
+            "policy_override_paraphrase",
+        ),
+        (
+            re.compile(r"\b(uncensored|unrestricted) mode\b"),
+            "policy_override_paraphrase",
+        ),
+        # Exfiltration paraphrases
+        (
+            re.compile(r"\brepeat your instructions\b"),
+            "prompt_exfiltration_paraphrase",
+        ),
+        (
+            re.compile(r"\bwhat were you told\b"),
+            "prompt_exfiltration_paraphrase",
+        ),
+        (
+            re.compile(r"\bshow me your prompt\b"),
+            "prompt_exfiltration_paraphrase",
+        ),
+        (
+            re.compile(r"\bdisplay your system\b"),
+            "prompt_exfiltration_paraphrase",
+        ),
     )
 
     def evaluate(self, text: str) -> JailbreakResult | None:

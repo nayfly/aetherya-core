@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.7.0 - 2026-03-11
+
+### Added
+- Constitution: hybrid two-layer evaluation architecture (`FastKeywordEvaluator` + `SemanticEvaluator`).
+- Constitution: contextual negation detection in `FastKeywordEvaluator` — 5-token lookback window with single negators (`not`, `no`, `never`, `without`, `avoid`, `prevent`) and multi-word phrases (`how to stop`, `how to prevent`).
+- Constitution: semantic evaluation layer using `sentence-transformers/all-MiniLM-L6-v2` with lazy model loading (no download on import).
+- Constitution: `use_semantic` parameter (default `False`, fully backward-compatible); semantic layer activates only on ambiguous short inputs.
+- `SemanticEvaluator`: cosine similarity thresholds — `>0.55` full violation, `0.35–0.55` gray zone (risk × 0.6), `<0.35` clean.
+- `OutputGate`: PII and secrets detection — email addresses, credit card numbers (plain and formatted), OpenAI API keys (`sk-`), GitHub tokens (`ghp_`), Slack tokens (`xox[baprs]-`), Bearer tokens, Spanish DNI/NIE, and IBAN ES numbers. Returns `risk_score=85`, `confidence=0.9`, `violated_principle="DataPrivacy"`.
+- `JailbreakGuard`: 16 new paraphrase-based patterns across 4 categories:
+  - `ignore_instructions_paraphrase` — set aside/overlook/discard instructions, pay no attention to, pretend no rules, forget guidelines
+  - `role_override_paraphrase` — pretend you are, act as if you were, simulate being, roleplay as unrestricted, you are now
+  - `policy_override_paraphrase` — respond without restrictions, answer freely, no limitations, uncensored/unrestricted mode
+  - `prompt_exfiltration_paraphrase` — repeat your instructions, what were you told, show me your prompt, display your system
+- `Parser`: question detection — `intent=ask` is forced when the input is interrogative (starts with a question word) or ends with `?`, preventing misclassification of informational queries as `intent=operate`.
+- `ActorRateLimiter`: sliding-window per-actor rate limiting with `threading.Lock` and configurable `requests_per_window` / `window_seconds` (`RateLimitConfig`). Integrated as optional step in `run_pipeline()`.
+- CI: new `semantic_slo` job with HuggingFace model cache, real-model slow test execution, and semantic pipeline benchmark (SLO: p95 ≤ 150ms, p99 ≤ 200ms).
+- CI: `release_readiness` now also requires `semantic_slo` to pass on tag releases.
+- `pytest.mark.slow` marker with `--run-slow` opt-in flag (via `conftest.py`) to skip model-download tests by default.
+
+### Fixed
+- Constitution: false positives from keyword matching without semantic context — negation-aware evaluation prevents blocking queries like "how to prevent delete accidents".
+- Parser: interrogative inputs like "How do I run a Docker container?" were incorrectly classified as `intent=operate`; now correctly classified as `intent=ask`.
+- `JailbreakGuard`: trivial bypasses via paraphrasing not covered by original literal patterns.
+- `pipeline._call_with_timeout`: thread leak on timeout — manual `threading.Event` + daemon thread replaced with `concurrent.futures.ThreadPoolExecutor` + `shutdown(wait=False)`.
+
+### Changed
+- Pipeline latency SLO split into two profiles: fast-path (p95 ≤ 10ms, no model) and semantic-path (p95 ≤ 150ms, with embeddings).
+- `pipeline_benchmark.py`: added `--use-semantic` flag for differentiated SLO benchmarks.
+- `pyproject.toml`: added `sentence-transformers>=2.7.0` and `numpy>=1.26.0` as runtime dependencies.
+
 ## v0.6.0 - 2026-03-02
 
 ### Added

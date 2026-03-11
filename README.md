@@ -3,7 +3,7 @@
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.6.0-informational)
+![Version](https://img.shields.io/badge/version-0.7.0-informational)
 
 A deterministic, risk-aware policy engine for evaluating actions under constitutional constraints and procedural safeguards.
 
@@ -80,7 +80,8 @@ flowchart LR
     Input --> Parser
     Parser --> ActionContract
     ActionContract --> Mode
-    Mode --> ExecutionGate
+    Mode --> RateLimiter
+    RateLimiter --> ExecutionGate
     ExecutionGate --> CapabilityGate
     CapabilityGate --> JailbreakGuard
     JailbreakGuard --> ProceduralGuard
@@ -102,6 +103,7 @@ flowchart LR
 
 Deterministic runtime order:
 - Parse + ABI contracts (`actor`, `action`)
+- Rate limiter (per-actor sliding-window check — fail-closed if exceeded)
 - Guard chain (`execution_gate` -> `capability_gate` -> `jailbreak_guard` -> `procedural_guard`)
 - Constitution signal evaluation
 - Risk aggregation + optional strong confirmation (token/context and optional signed out-of-band proof)
@@ -131,7 +133,21 @@ Out of scope:
 
 ### Constitution
 
-Evaluates actions against defined principles.
+Evaluates actions against defined principles using a hybrid two-layer architecture.
+
+**Layer 1 — `FastKeywordEvaluator`** (always runs):
+- Deterministic keyword matching with contextual negation detection (5-token lookback).
+- Blocks obviously harmful inputs immediately (`confidence=0.9`, no model needed).
+- Marks short/ambiguous inputs for semantic escalation.
+- SLO: **p95 ≤ 10ms**.
+
+**Layer 2 — `SemanticEvaluator`** (only for ambiguous inputs when `use_semantic=True`):
+- Lazy-loaded `sentence-transformers/all-MiniLM-L6-v2` embeddings (no download on import).
+- Cosine similarity thresholds: `>0.55` violation, `0.35–0.55` gray zone (risk × 0.6), `<0.35` clean.
+- Falls back to degraded fast result if model is unavailable.
+- SLO: **p95 ≤ 150ms**.
+
+Default mode (`use_semantic=False`) is fully backward-compatible and requires no model download.
 
 Returns structured signals:
 - `risk_score`
@@ -179,9 +195,10 @@ Provider contract for non-authoritative telemetry:
 
 ### OutputGate (Response Safety)
 
-Optional deterministic response guard to prevent toxic/insulting output:
+Optional deterministic response guard to prevent toxic/insulting output and data leakage:
 - evaluates candidate user-facing response text before delivery
 - emits `output_gate` risk signal (`OutputSafety`) when toxic terms are detected
+- detects PII and secrets before they reach the user: email addresses, credit card numbers, API keys (`sk-`, `ghp_`, `xox[baprs]-`, Bearer tokens), Spanish DNI/NIE, and IBAN ES numbers — emits `DataPrivacy` signal with `risk_score=85`
 - fail-closed on internal gate errors (`fail_closed:output_gate`)
 - stores hashed output evidence in audit context (`response_hash`, `response_length`)
 
@@ -221,6 +238,13 @@ Optional Redis replay-store integration:
 
 ```bash
 pip install -e ".[dev,redis]"
+```
+
+Optional semantic evaluation (sentence-transformers + numpy are included as runtime dependencies):
+
+```bash
+# Already included — use_semantic=True in Constitution to activate
+pip install -e ".[dev]"
 ```
 
 ## CLI
@@ -626,9 +650,13 @@ In CI, `security_gate` runs as an explicit job and tag releases (`v*`) are block
 
 Each run uploads `audit/chaos/chaos_benchmark_metrics.json` as build artifact.
 
-`pipeline_slo` runs independently in CI and enforces normal-operation latency SLOs over a deterministic 100-input corpus:
+`pipeline_slo` runs independently in CI and enforces normal-operation latency SLOs over a deterministic 100-input corpus (fast path, no semantic model):
 - `p95 <= 10ms`
 - `p99 <= 15ms`
+
+`semantic_slo` runs independently in CI, caches the HuggingFace model, and enforces semantic pipeline SLOs over a 50-input corpus:
+- `p95 <= 150ms`
+- `p99 <= 200ms`
 
 `release_readiness` now validates signed artifacts (`security_manifest.json`) with strict checks:
 - manifest must be present and non-empty
@@ -666,7 +694,7 @@ python -m aetherya.security_baseline --update-baseline
 
 ## Status
 
-`v0.6.0` – Stable security-hardening release with Redis-backed replay protection and split decision/approvals service profiles, preserving deterministic policy enforcement.
+`v0.7.0` – Hybrid constitution evaluation, PII/secrets output guard, expanded jailbreak coverage, per-actor rate limiting, and dual latency SLO enforcement (fast-path p95 ≤ 10ms, semantic-path p95 ≤ 150ms).
 
 See [CHANGELOG.md](./CHANGELOG.md) for release details.
 

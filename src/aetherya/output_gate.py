@@ -30,6 +30,52 @@ class OutputGateVerdict:
     matched_terms: list[str]
 
 
+_PII_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Email
+    (
+        re.compile(r"\b[\w.+\-]+@[\w\-]+\.[\w.\-]+\b"),
+        "email",
+    ),
+    # Credit card: 13-16 digits, optional space/dash separators between groups
+    (
+        re.compile(r"\b(?:\d{4}[ -]?){3}\d{1,4}\b"),
+        "credit_card",
+    ),
+    # API keys: OpenAI sk-, GitHub ghp_, Slack xox*, generic Bearer
+    (
+        re.compile(r"\bsk-[a-zA-Z0-9]{20,}\b"),
+        "api_key",
+    ),
+    (
+        re.compile(r"\bghp_[a-zA-Z0-9]{36}\b"),
+        "api_key",
+    ),
+    (
+        re.compile(r"\bxox[baprs]-[a-zA-Z0-9\-]+\b"),
+        "api_key",
+    ),
+    (
+        re.compile(r"\bBearer\s+[a-zA-Z0-9._\-]{10,}\b"),
+        "api_key",
+    ),
+    # DNI español: 8 digits + letter
+    (
+        re.compile(r"\b\d{8}[A-Z]\b"),
+        "dni",
+    ),
+    # NIE español: X/Y/Z + 7 digits + letter
+    (
+        re.compile(r"\b[XYZ]\d{7}[A-Z]\b"),
+        "nie",
+    ),
+    # IBAN español: ES + 22 digits
+    (
+        re.compile(r"\bES\d{22}\b"),
+        "iban",
+    ),
+)
+
+
 class OutputGate:
     _DEFAULT_TERMS: Final[tuple[str, ...]] = (
         "idiot",
@@ -69,15 +115,27 @@ class OutputGate:
             return None
 
         matched_terms = [term for term in self._terms if self._patterns[term].search(normalized)]
-        if not matched_terms:
-            return None
+        if matched_terms:
+            return OutputGateVerdict(
+                blocked=True,
+                risk_score=100,
+                confidence=1.0,
+                reason=f"output toxicity detected: {matched_terms[0]}",
+                tags=["output_toxicity", "critical_tag_detected"],
+                violated_principle="OutputSafety",
+                matched_terms=matched_terms,
+            )
 
-        return OutputGateVerdict(
-            blocked=True,
-            risk_score=100,
-            confidence=1.0,
-            reason=f"output toxicity detected: {matched_terms[0]}",
-            tags=["output_toxicity", "critical_tag_detected"],
-            violated_principle="OutputSafety",
-            matched_terms=matched_terms,
-        )
+        for pattern, label in _PII_PATTERNS:
+            if pattern.search(text):
+                return OutputGateVerdict(
+                    blocked=True,
+                    risk_score=85,
+                    confidence=0.9,
+                    reason=f"sensitive data detected: {label}",
+                    tags=["pii_detected", "output_sensitive_data"],
+                    violated_principle="DataPrivacy",
+                    matched_terms=[label],
+                )
+
+        return None

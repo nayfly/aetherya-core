@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
-import threading
 from typing import Any
 
 from aetherya.actions import Decision, validate_action_request, validate_actor
@@ -33,6 +33,7 @@ from aetherya.policy_decision_adapter import (
 )
 from aetherya.policy_engine import DecisionState, PolicyEngine
 from aetherya.procedural_guard import ProceduralGuard
+from aetherya.rate_limiter import ActorRateLimiter
 from aetherya.risk import RiskAggregator, RiskDecision, RiskSignal
 
 
@@ -152,31 +153,14 @@ def _call_with_timeout(*, callback: Any, timeout_sec: float, timeout_label: str)
     if timeout_sec <= 0.0:
         return callback()
 
-    done = threading.Event()
-    payload: dict[str, Any] = {}
-
-    def _worker() -> None:
-        try:
-            payload["response"] = callback()
-        except Exception as exc:  # pragma: no cover - surfaced via payload branch
-            payload["error"] = exc
-        finally:
-            done.set()
-
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
-    done.wait(timeout=float(timeout_sec))
-    if not done.is_set():
-        raise TimeoutError(f"{timeout_label} timed out after {timeout_sec:.3f}s")
-
-    error = payload.get("error")
-    if isinstance(error, Exception):
-        raise error
-
-    if "response" not in payload:
-        raise RuntimeError(f"{timeout_label} returned no response")
-
-    return payload["response"]
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(callback)
+    try:
+        return future.result(timeout=float(timeout_sec))
+    except concurrent.futures.TimeoutError:
+        raise TimeoutError(f"{timeout_label} timed out after {timeout_sec:.3f}s") from None
+    finally:
+        executor.shutdown(wait=False)
 
 
 def _default_policy_adapter_shadow_config() -> PolicyAdapterShadowConfig:
@@ -279,6 +263,7 @@ def run_pipeline(
     cfg: PolicyConfig,
     audit: AuditLogger | None = None,
     response_text: str | None = None,
+    rate_limiter: ActorRateLimiter | None = None,
 ) -> Decision:
     # SAFE DEFAULT
     mode: Mode = Mode.CONSULTIVE
@@ -300,6 +285,19 @@ def run_pipeline(
                     set_fingerprint(policy_fingerprint)
                 except Exception:
                     pass
+
+    # -1) Rate limit check (before any validation)
+    if rate_limiter is not None:
+        if not rate_limiter.check(safe_actor):
+            return _fail_closed(
+                raw_input=raw_input,
+                actor=safe_actor,
+                mode=mode,
+                stage="rate_limit",
+                exc=Exception(f"rate limit exceeded for actor '{safe_actor}'"),
+                audit=audit,
+                policy_fingerprint=policy_fingerprint,
+            )
 
     # 0) ABI input contract (actor)
     try:
