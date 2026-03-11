@@ -232,7 +232,7 @@ jobs:
         run: |
           python -m aetherya.pipeline_benchmark \
             --runs 1 \
-            --corpus-size 50 \
+            --corpus-size 100 \
             --seed 1337 \
             --p95-max-ms 150 \
             --p99-max-ms 200 \

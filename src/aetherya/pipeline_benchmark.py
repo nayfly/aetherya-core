@@ -56,7 +56,25 @@ def _round4(value: float) -> float:
     return round(float(value), 4)
 
 
-_WARMUP_RUNS: int = 3
+_WARMUP_RUNS: int = 10
+
+# Short, keyword-free inputs that are guaranteed to be < 10 tokens → ambiguous in
+# FastKeywordEvaluator → the SemanticEvaluator._ensure_loaded() call fires during warmup.
+# Using corpus texts for warmup is insufficient because most corpus patterns are long
+# (>10 tokens) and take the fast path, leaving the model unloaded until the first
+# ambiguous input in the real timed run.
+_SEMANTIC_WARMUP_INPUTS: tuple[str, ...] = (
+    "help me",
+    "check this",
+    "review item",
+    "analyze that",
+    "proceed now",
+    "verify this",
+    "run check",
+    "inspect it",
+    "go ahead",
+    "confirm please",
+)
 
 
 def _make_constitution(use_semantic: bool = False) -> Constitution:
@@ -168,10 +186,15 @@ def run_pipeline_benchmark(
     constitution = _make_constitution(use_semantic=use_semantic)
     corpus = _build_input_corpus(corpus_size, seed)
 
-    # Warmup: trigger lazy model loading and JIT stabilisation before measurement.
-    # Only relevant for the semantic path; fast-path constitution skips this cheaply.
-    if use_semantic and corpus:
-        for warmup_text in [corpus[i % len(corpus)] for i in range(_WARMUP_RUNS)]:
+    # Warmup: force SemanticEvaluator._ensure_loaded() before timed measurement.
+    # Uses _SEMANTIC_WARMUP_INPUTS — short texts (<10 tokens, no keywords) that are
+    # guaranteed ambiguous, so FastKeywordEvaluator escalates to the semantic layer
+    # on every warmup call.  Corpus inputs are intentionally not used here because
+    # most are long (>10 tokens) and take the fast keyword path, which would leave
+    # the sentence-transformer model unloaded until the first ambiguous corpus input
+    # lands inside the timed loop.
+    if use_semantic:
+        for warmup_text in _SEMANTIC_WARMUP_INPUTS:
             run_pipeline(warmup_text, constitution=constitution, actor=actor, cfg=cfg)
 
     samples: list[PipelineLatencySample] = []
