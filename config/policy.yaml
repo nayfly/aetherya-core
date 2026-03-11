@@ -126,3 +126,17 @@ llm_shadow:
 policy_adapter_shadow:
   enabled: false
   max_signals: 3
+
+# OutputGate contract configuration.
+# require_candidate_response: false (default) means OutputGate is opt-in —
+# the caller chooses whether to pass candidate_response to run_pipeline.
+# Set to true in deployments where output protection must always be enforced.
+output_gate:
+  require_candidate_response: false
+
+# Constitution semantic evaluator thresholds.
+# These govern the SemanticEvaluator (active only when use_semantic=True).
+# Modify with care: lowering thresholds increases sensitivity and false-positive risk.
+constitution:
+  semantic_violation_threshold: 0.55
+  semantic_gray_zone_threshold: 0.35

@@ -4,6 +4,36 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.8.0 - 2026-03-11
+
+### Security
+
+- `Parser`: operative content now takes unconditional priority over question framing. Inputs containing an operative verb (`run`, `execute`, `delete`, `send`, `curl`, `docker`, `rm`) or an explicit `tool:` field are classified as `intent=operate / mode=operative` regardless of whether they start with a question word or end with `?`. Previously, question framing could downgrade an operationally active input to `mode=consultive`, applying looser risk thresholds. Question heuristic now applies only to inputs with zero operative signals.
+- `JailbreakGuard`: text is now Unicode-normalized before pattern matching (NFKD decomposition + stripping of combining chars and Unicode format characters — category `Cf`). This eliminates bypass via zero-width spaces (U+200B), zero-width joiners (U+200C/D), BOM (U+FEFF), diacritic insertion, and fullwidth character substitution.
+- `JailbreakGuard`: multilingual pattern corpus added — Spanish, French, German. Covers role override, policy override, instruction suppression, and prompt exfiltration patterns in each language. Post-normalization matching handles accented variants without separate patterns.
+- `JailbreakGuard`: all matching patterns are now collected before returning instead of stopping at first match. Complete tag list is preserved in the audit trace for telemetry and explainability.
+- `OutputGate`: extended PII pattern coverage — AWS Access Key ID (`AKIA[0-9A-Z]{16}`), JWT tokens (three base64url segments), PEM private key blocks (`-----BEGIN * PRIVATE KEY-----`), Anthropic API keys (`sk-ant-`), and phone numbers (US/E.164 with structural separators). `sk-ant-` pattern checked before generic `sk-` to ensure correct categorization.
+- `OutputGate`: new `output_gate.require_candidate_response` policy flag (default `false`). When set to `true`, `run_pipeline` fails-closed at stage `output_gate_required` if `response_text` is not provided, making output protection a hard enforcement rather than an opt-in.
+
+### Added
+
+- `config.py`: `OutputGateConfig` dataclass with `require_candidate_response` field. Loaded from `policy.yaml` under `output_gate` key.
+- `config.py`: `ConstitutionConfig` dataclass with `semantic_violation_threshold` (default `0.55`) and `semantic_gray_zone_threshold` (default `0.35`) fields. Loaded from `policy.yaml` under `constitution` key. Both values validated on load: violation threshold must be in `(0.0, 1.0]`, gray zone must be in `[0.0, violation_threshold)`.
+- `policy.yaml`: explicit `output_gate` and `constitution` sections with documented defaults and contract notes.
+- `Constitution` and `SemanticEvaluator`: accept `semantic_violation_threshold` and `semantic_gray_zone_threshold` constructor parameters (backward-compatible, defaults preserved).
+- `ActorRateLimiter`: explicit docstring documenting single-process safeguard scope and multi-process limitation.
+
+### Fixed
+
+- `Parser`: inputs like `"Can you delete all logs?"` or `"What does rm -rf do?"` were incorrectly classified as `intent=ask / mode=consultive` despite containing operative verbs. These now correctly resolve to `intent=operate / mode=operative`.
+- `SemanticEvaluator`: violation and gray-zone thresholds were hardcoded at `0.55` / `0.35` with no external configuration point.
+
+### Compatibility Notes
+
+- `PolicyConfig` gains two new optional fields with defaults: `output_gate_config: OutputGateConfig` and `constitution_config: ConstitutionConfig`. Existing callers constructing `PolicyConfig` directly must add these if not using keyword arguments, or migrate to `load_policy_config`.
+- `Constitution.__init__` gains two new optional keyword parameters with defaults: `semantic_violation_threshold=0.55`, `semantic_gray_zone_threshold=0.35`. Existing callers are unaffected.
+- Parser behavior change: inputs combining question framing with operative verbs now resolve to `operate/operative` instead of `ask/consultive`. Any tests or downstream logic relying on the old behavior must be updated.
+
 ## v0.7.0 - 2026-03-11
 
 ### Added
@@ -18,7 +48,7 @@ All notable changes to this project are documented in this file.
   - `role_override_paraphrase` — pretend you are, act as if you were, simulate being, roleplay as unrestricted, you are now
   - `policy_override_paraphrase` — respond without restrictions, answer freely, no limitations, uncensored/unrestricted mode
   - `prompt_exfiltration_paraphrase` — repeat your instructions, what were you told, show me your prompt, display your system
-- `Parser`: question detection — `intent=ask` is forced when the input is interrogative (starts with a question word) or ends with `?`, preventing misclassification of informational queries as `intent=operate`.
+- `Parser`: question detection — `intent=ask` is set for interrogative inputs (starts with a question word or ends with `?`) when no operative signals are present, preventing misclassification of purely informational queries as `intent=operate`.
 - `ActorRateLimiter`: sliding-window per-actor rate limiting with `threading.Lock` and configurable `requests_per_window` / `window_seconds` (`RateLimitConfig`). Integrated as optional step in `run_pipeline()`.
 - CI: new `semantic_slo` job with HuggingFace model cache, real-model slow test execution, and semantic pipeline benchmark (SLO: p95 ≤ 150ms, p99 ≤ 200ms).
 - CI: `release_readiness` now also requires `semantic_slo` to pass on tag releases.
@@ -26,7 +56,6 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Constitution: false positives from keyword matching without semantic context — negation-aware evaluation prevents blocking queries like "how to prevent delete accidents".
-- Parser: interrogative inputs like "How do I run a Docker container?" were incorrectly classified as `intent=operate`; now correctly classified as `intent=ask`.
 - `JailbreakGuard`: trivial bypasses via paraphrasing not covered by original literal patterns.
 - `pipeline._call_with_timeout`: thread leak on timeout — manual `threading.Event` + daemon thread replaced with `concurrent.futures.ThreadPoolExecutor` + `shutdown(wait=False)`.
 

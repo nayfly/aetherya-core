@@ -21,10 +21,9 @@ def test_parser_keeps_consultive_for_plain_question() -> None:
     assert action.tool is None
 
 
-def test_parser_question_with_operative_keyword_is_still_ask() -> None:
-    action = parse_user_input("How do I run a Docker container?")
+def test_parser_interrogative_without_question_mark_forces_ask() -> None:
+    action = parse_user_input("what is the current disk usage")
     assert action.intent == "ask"
-    assert action.mode_hint == "consultive"
 
 
 def test_parser_operative_verb_without_question_is_operate() -> None:
@@ -32,23 +31,74 @@ def test_parser_operative_verb_without_question_is_operate() -> None:
     assert action.intent == "operate"
 
 
-def test_parser_what_question_with_dangerous_keyword_is_ask() -> None:
-    action = parse_user_input("What does rm -rf do?")
-    assert action.intent == "ask"
-    assert action.mode_hint == "consultive"
-
-
 def test_parser_execute_command_is_operate() -> None:
     action = parse_user_input("execute backup.sh")
     assert action.intent == "operate"
 
 
-def test_parser_trailing_question_mark_forces_ask() -> None:
+# ── Security contract: operative content wins over question framing ───────────
+
+
+def test_parser_operative_content_wins_over_can_question_framing() -> None:
+    """
+    'Can you run rm -rf /tmp/x' contains 'run' (operative verb).
+    Question framing must NOT downgrade to consultive mode.
+    """
+    action = parse_user_input("Can you run rm -rf /tmp/x")
+    assert action.intent == "operate"
+    assert action.mode_hint == "operative"
+
+
+def test_parser_question_with_delete_verb_is_operative() -> None:
+    """
+    'Can you delete all logs?' contains 'delete' — operative.
+    Previously (incorrectly) returned ask/consultive.
+    """
     action = parse_user_input("Can you delete all logs?")
-    assert action.intent == "ask"
-    assert action.mode_hint == "consultive"
+    assert action.intent == "operate"
+    assert action.mode_hint == "operative"
 
 
-def test_parser_interrogative_without_question_mark_forces_ask() -> None:
-    action = parse_user_input("what is the current disk usage")
-    assert action.intent == "ask"
+def test_parser_question_with_run_verb_is_operative() -> None:
+    """
+    'How do I run a Docker container?' contains 'run' and 'docker' — operative.
+    Previously (incorrectly) returned ask/consultive.
+    """
+    action = parse_user_input("How do I run a Docker container?")
+    assert action.intent == "operate"
+    assert action.mode_hint == "operative"
+
+
+def test_parser_question_with_rm_is_operative() -> None:
+    """
+    'What does rm -rf do?' contains 'rm' — operative.
+    Previously (incorrectly) returned ask/consultive.
+    """
+    action = parse_user_input("What does rm -rf do?")
+    assert action.intent == "operate"
+    assert action.mode_hint == "operative"
+
+
+def test_parser_explicit_tool_on_question_is_operative() -> None:
+    """
+    Explicit tool:shell overrides question framing unconditionally.
+    """
+    action = parse_user_input("Can you tool:shell param.command=whoami please?")
+    assert action.intent == "operate"
+    assert action.mode_hint == "operative"
+    assert action.tool == "shell"
+
+
+def test_parser_benign_question_no_operative_keywords_stays_ask() -> None:
+    """
+    Questions with no operative keywords remain ask/consultive.
+    """
+    for text in [
+        "What is the best way to structure a CI pipeline?",
+        "Is it safe to store secrets in environment variables?",
+        "How do I configure TLS?",
+        "could you explain rate limiting?",
+    ]:
+        action = parse_user_input(text)
+        assert action.intent == "ask", f"Expected ask for: {text!r}"
+        assert action.mode_hint == "consultive", f"Expected consultive for: {text!r}"

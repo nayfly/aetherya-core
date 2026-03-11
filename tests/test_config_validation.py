@@ -868,3 +868,41 @@ def test_policy_adapter_shadow_invalid_max_signals_raises(tmp_path):
 
     with pytest.raises(ValueError, match="policy_adapter_shadow.max_signals"):
         load_policy_config(path)
+
+
+def test_constitution_config_violation_threshold_out_of_range(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "constitution": {"semantic_violation_threshold": 0.0, "semantic_gray_zone_threshold": 0.0},
+    }
+    path = tmp_path / "constitution_bad_violation.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError, match="semantic_violation_threshold"):
+        load_policy_config(path)
+
+
+def test_constitution_config_gray_zone_exceeds_violation(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "constitution": {"semantic_violation_threshold": 0.5, "semantic_gray_zone_threshold": 0.6},
+    }
+    path = tmp_path / "constitution_bad_gray.yaml"
+    path.write_text(yaml.dump(cfg_data))
+    with pytest.raises(ValueError, match="semantic_gray_zone_threshold"):
+        load_policy_config(path)

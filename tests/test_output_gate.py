@@ -106,3 +106,46 @@ def test_output_gate_detects_iban() -> None:
 def test_output_gate_clean_text_returns_none() -> None:
     gate = OutputGate()
     assert gate.evaluate("The answer is 42 and everything is fine.") is None
+
+
+# ── Extended PII coverage ─────────────────────────────────────────────────────
+
+
+def test_output_gate_detects_aws_access_key() -> None:
+    _assert_pii(_pii("Use AKIAIOSFODNN7EXAMPLE to authenticate with AWS."))
+
+
+def test_output_gate_detects_jwt_token() -> None:
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    _assert_pii(_pii(f"Authorization token: {jwt}"))
+
+
+def test_output_gate_detects_private_key_block() -> None:
+    _assert_pii(_pii("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA..."))
+
+
+def test_output_gate_detects_ec_private_key_block() -> None:
+    _assert_pii(_pii("-----BEGIN EC PRIVATE KEY-----\nMHQCAQEEI..."))
+
+
+def test_output_gate_detects_anthropic_key() -> None:
+    _assert_pii(_pii("API key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890ab"))
+
+
+def test_output_gate_detects_phone_us_dashes() -> None:
+    _assert_pii(_pii("Call me at 555-867-5309 for details."))
+
+
+def test_output_gate_detects_phone_international() -> None:
+    _assert_pii(_pii("Contact: +1-800-555-1234"))
+
+
+def test_output_gate_detects_phone_parentheses() -> None:
+    _assert_pii(_pii("Reach us at (555) 867-5309 anytime."))
+
+
+def test_output_gate_anthropic_key_matched_as_api_key() -> None:
+    """sk-ant- pattern is detected and categorized as api_key."""
+    verdict = OutputGate().evaluate("key: sk-ant-api03-xyzxyzxyzxyzxyzxyzxyzxyz")
+    assert verdict is not None
+    assert verdict.matched_terms[0] == "api_key"

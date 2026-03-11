@@ -111,3 +111,59 @@ def test_pipeline_output_gate_failure_is_fail_closed(
     event = _read_last_event(audit_path)
     assert event["context"]["stage"] == "output_gate"
     assert event["context"]["error_type"] == "RuntimeError"
+
+
+def test_pipeline_output_gate_require_candidate_response_fail_closed(tmp_path: Path) -> None:
+    """
+    When output_gate.require_candidate_response=True in policy, calling run_pipeline
+    without candidate_response must fail-closed (not silently skip the gate).
+    """
+    from dataclasses import replace
+
+    from aetherya.config import OutputGateConfig
+
+    cfg_base = load_policy_config("config/policy.yaml")
+    cfg = replace(cfg_base, output_gate_config=OutputGateConfig(require_candidate_response=True))
+    audit_path = tmp_path / "decisions.jsonl"
+    audit = AuditLogger(audit_path)
+
+    decision = run_pipeline(
+        "help user",
+        constitution=_core(),
+        actor="robert",
+        cfg=cfg,
+        audit=audit,
+        response_text=None,  # No candidate_response provided
+    )
+
+    assert decision.allowed is False
+    assert decision.state == "escalate"
+    assert "fail_closed:output_gate" in decision.reason
+
+    event = _read_last_event(audit_path)
+    assert event["context"]["stage"] == "output_gate"
+
+
+def test_pipeline_output_gate_require_candidate_response_with_clean_response(
+    tmp_path: Path,
+) -> None:
+    """
+    When require_candidate_response=True and a clean response is provided,
+    the pipeline should proceed normally.
+    """
+    from dataclasses import replace
+
+    from aetherya.config import OutputGateConfig
+
+    cfg_base = load_policy_config("config/policy.yaml")
+    cfg = replace(cfg_base, output_gate_config=OutputGateConfig(require_candidate_response=True))
+
+    decision = run_pipeline(
+        "help user",
+        constitution=_core(),
+        actor="robert",
+        cfg=cfg,
+        response_text="Here is the answer you requested.",
+    )
+
+    assert decision.allowed is True

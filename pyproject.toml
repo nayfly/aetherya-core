@@ -67,7 +67,7 @@ redis = [
 
 [project]
 name = "aetherya-core"
-version = "0.6.0"
+version = "0.8.0"
 dependencies = [
   "sentence-transformers>=2.7.0",
   "numpy>=1.26.0",

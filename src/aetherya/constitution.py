@@ -126,6 +126,8 @@ class SemanticEvaluator:
         principles: list[Principle],
         model_name: str = "all-MiniLM-L6-v2",
         model_factory: Callable[[str], Any] | None = None,
+        violation_threshold: float = 0.55,
+        gray_zone_threshold: float = 0.35,
     ) -> None:
         self._principles = principles
         self._model_name = model_name
@@ -134,6 +136,8 @@ class SemanticEvaluator:
         self._ref_embeddings: Any = None
         self._ref_principle_indices: list[int] = []
         self._loaded: bool = False
+        self._violation_threshold = violation_threshold
+        self._gray_zone_threshold = gray_zone_threshold
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -175,7 +179,7 @@ class SemanticEvaluator:
                 best_sim = max_sim
                 best_p = p
 
-        if best_p is not None and best_sim > 0.55:
+        if best_p is not None and best_sim > self._violation_threshold:
             return {
                 "allowed": False,
                 "violated_principle": best_p.name,
@@ -186,7 +190,7 @@ class SemanticEvaluator:
                 "tags": [],
             }
 
-        if best_p is not None and best_sim > 0.35:
+        if best_p is not None and best_sim > self._gray_zone_threshold:
             return {
                 "allowed": False,
                 "violated_principle": best_p.name,
@@ -219,12 +223,20 @@ class Constitution:
         principles: list[Principle],
         audit: AuditLogger | None = None,
         use_semantic: bool = False,
+        semantic_violation_threshold: float = 0.55,
+        semantic_gray_zone_threshold: float = 0.35,
     ) -> None:
         self.principles = sorted(principles, key=lambda p: p.priority)
         self.audit = audit
         self._fast_evaluator = FastKeywordEvaluator(self.principles)
         self._semantic_evaluator: SemanticEvaluator | None = (
-            SemanticEvaluator(self.principles) if use_semantic else None
+            SemanticEvaluator(
+                self.principles,
+                violation_threshold=semantic_violation_threshold,
+                gray_zone_threshold=semantic_gray_zone_threshold,
+            )
+            if use_semantic
+            else None
         )
 
     def evaluate(

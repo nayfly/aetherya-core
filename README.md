@@ -3,7 +3,7 @@
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.7.0-informational)
+![Version](https://img.shields.io/badge/version-0.8.0-informational)
 
 A deterministic, risk-aware policy engine for evaluating actions under constitutional constraints and procedural safeguards.
 
@@ -143,7 +143,7 @@ Evaluates actions against defined principles using a hybrid two-layer architectu
 
 **Layer 2 — `SemanticEvaluator`** (only for ambiguous inputs when `use_semantic=True`):
 - Lazy-loaded `sentence-transformers/all-MiniLM-L6-v2` embeddings (no download on import).
-- Cosine similarity thresholds: `>0.55` violation, `0.35–0.55` gray zone (risk × 0.6), `<0.35` clean.
+- Cosine similarity thresholds: `>0.55` violation, `0.35–0.55` gray zone (risk × 0.6), `<0.35` clean. Both thresholds configurable via `constitution.semantic_violation_threshold` / `constitution.semantic_gray_zone_threshold` in `policy.yaml`.
 - Falls back to degraded fast result if model is unavailable.
 - SLO: **p95 ≤ 150ms**.
 
@@ -154,6 +154,22 @@ Returns structured signals:
 - `reason`
 - `tags`
 - `violated_principle`
+
+### Parser (Input Boundary)
+
+Converts raw text input into a typed `ActionRequest`. Non-authoritative for security mode by design:
+- operative content signals (explicit `tool:`, operative verb keywords: `run`, `execute`, `delete`, `send`, `curl`, `docker`, `rm`) take unconditional priority over question framing
+- a text like `"Can you run rm -rf /tmp"` is classified as `intent=operate / mode=operative` because it contains an operative verb, regardless of starting with `"can"`
+- question heuristic applies only to inputs with no operative signals; this cannot downgrade the security mode of an operational request
+- structured callers (passing explicit `mode:operative tool:...` fields) always take precedence over the heuristic
+
+### JailbreakGuard
+
+Deterministic prompt injection detection:
+- unicode normalization before pattern matching: NFKD decomposition, diacritic stripping, and Unicode format character removal (category `Cf`: zero-width chars, BOM, soft hyphen) — eliminates trivial bypass via invisible characters and accented variants
+- multilingual pattern corpus: English, Spanish (`es`), French (`fr`), German (`de`) — covers role override, policy override, instruction suppression, and prompt exfiltration in all four languages
+- all matching patterns are collected before returning; full tag list preserved in audit for telemetry, not just the first match
+- returns `risk_score=95`, `confidence=0.95`, tags: `["jailbreak_attempt", "prompt_injection", <specific_tags>]`
 
 ### Procedural Guard
 
@@ -198,7 +214,8 @@ Provider contract for non-authoritative telemetry:
 Optional deterministic response guard to prevent toxic/insulting output and data leakage:
 - evaluates candidate user-facing response text before delivery
 - emits `output_gate` risk signal (`OutputSafety`) when toxic terms are detected
-- detects PII and secrets before they reach the user: email addresses, credit card numbers, API keys (`sk-`, `ghp_`, `xox[baprs]-`, Bearer tokens), Spanish DNI/NIE, and IBAN ES numbers — emits `DataPrivacy` signal with `risk_score=85`
+- detects PII and secrets before they reach the user: email addresses, credit card numbers, API keys (`sk-`, `sk-ant-`, `ghp_`, `xox[baprs]-`, Bearer tokens, AWS AKIA keys, JWTs, PEM private key blocks), phone numbers (US/E.164 with separators), Spanish DNI/NIE, and IBAN ES numbers — emits `DataPrivacy` signal with `risk_score=85`
+- contract enforcement: set `output_gate.require_candidate_response: true` in `policy.yaml` to fail-closed when `candidate_response` is not passed to `run_pipeline`; default is `false` (opt-in, integrator responsibility)
 - fail-closed on internal gate errors (`fail_closed:output_gate`)
 - stores hashed output evidence in audit context (`response_hash`, `response_length`)
 
@@ -694,7 +711,7 @@ python -m aetherya.security_baseline --update-baseline
 
 ## Status
 
-`v0.7.0` – Hybrid constitution evaluation, PII/secrets output guard, expanded jailbreak coverage, per-actor rate limiting, and dual latency SLO enforcement (fast-path p95 ≤ 10ms, semantic-path p95 ≤ 150ms).
+`v0.8.0` – Input security hardening: parser operative-content authority, multilingual JailbreakGuard with unicode normalization, expanded OutputGate PII coverage with explicit contract enforcement, and configurable semantic thresholds.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release details.
 

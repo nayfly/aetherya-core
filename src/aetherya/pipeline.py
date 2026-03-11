@@ -14,6 +14,7 @@ from aetherya.config import (
     ConfirmationRequireConfig,
     ExecutionGateConfig,
     LLMShadowConfig,
+    OutputGateConfig,
     PolicyAdapterShadowConfig,
     PolicyConfig,
 )
@@ -486,8 +487,17 @@ def run_pipeline(
         )
 
     output_gate: dict[str, Any] | None = None
-    # 6.5) Output Gate (fail-closed si peta, sólo cuando hay respuesta candidata)
+    # 6.5) Output Gate (fail-closed si peta)
+    # Contrato: si output_gate_config.require_candidate_response=True y no se
+    # proporcionó candidate_response, el pipeline falla cerrado.
+    # Si require_candidate_response=False (default), la ausencia de candidate_response
+    # simplemente omite el gate — el integrador asume responsabilidad.
+    output_gate_cfg = getattr(cfg, "output_gate_config", None) or OutputGateConfig()
     try:
+        if response_text is None and output_gate_cfg.require_candidate_response:
+            raise ValueError(
+                "output_gate.require_candidate_response is true but candidate_response was not provided"
+            )
         if response_text is not None:
             verdict = OutputGate().evaluate(response_text)
             if verdict:

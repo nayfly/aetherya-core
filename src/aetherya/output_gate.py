@@ -41,7 +41,11 @@ _PII_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"\b(?:\d{4}[ -]?){3}\d{1,4}\b"),
         "credit_card",
     ),
-    # API keys: OpenAI sk-, GitHub ghp_, Slack xox*, generic Bearer
+    # API keys: OpenAI sk- (generic), Anthropic sk-ant-, GitHub ghp_, Slack xox*, generic Bearer
+    (
+        re.compile(r"\bsk-ant-[a-zA-Z0-9_\-]{20,}\b"),
+        "api_key",
+    ),
     (
         re.compile(r"\bsk-[a-zA-Z0-9]{20,}\b"),
         "api_key",
@@ -57,6 +61,27 @@ _PII_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(r"\bBearer\s+[a-zA-Z0-9._\-]{10,}\b"),
         "api_key",
+    ),
+    # AWS Access Key ID
+    (
+        re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+        "aws_access_key",
+    ),
+    # JWT token: three base64url segments separated by dots
+    (
+        re.compile(r"eyJ[a-zA-Z0-9_\-]{10,}\.eyJ[a-zA-Z0-9_\-]{10,}\.[a-zA-Z0-9_\-]{10,}"),
+        "jwt_token",
+    ),
+    # PEM private key block
+    (
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+        "private_key",
+    ),
+    # Phone number: US/E.164 formats (+1-NXX-NXX-XXXX, (NXX) NXX-XXXX, NXX.NXX.XXXX, +CC NXX…)
+    # Deliberately conservative: requires at least one structural separator to reduce FP.
+    (
+        re.compile(r"(\+\d{1,3}[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b"),
+        "phone_number",
     ),
     # DNI español: 8 digits + letter
     (

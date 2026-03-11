@@ -30,7 +30,10 @@ from aetherya.security_gate import main as security_gate_main
 from aetherya.verify_release_artifacts import main as verify_release_artifacts_main
 
 
-def _default_constitution() -> Constitution:
+def _default_constitution(
+    semantic_violation_threshold: float = 0.55,
+    semantic_gray_zone_threshold: float = 0.35,
+) -> Constitution:
     return Constitution(
         [
             Principle(
@@ -61,11 +64,17 @@ def _default_constitution() -> Constitution:
                 keywords=["rm -rf /", "mkfs", "drop table"],
                 risk=92,
             ),
-        ]
+        ],
+        semantic_violation_threshold=semantic_violation_threshold,
+        semantic_gray_zone_threshold=semantic_gray_zone_threshold,
     )
 
 
-def _load_constitution(path: Path) -> Constitution:
+def _load_constitution(
+    path: Path,
+    semantic_violation_threshold: float = 0.55,
+    semantic_gray_zone_threshold: float = 0.35,
+) -> Constitution:
     if not path.exists():
         raise ValueError(f"constitution file not found: {path}")
 
@@ -106,7 +115,11 @@ def _load_constitution(path: Path) -> Constitution:
                 risk=int(raw_item.get("risk", 50)),
             )
         )
-    return Constitution(principles)
+    return Constitution(
+        principles,
+        semantic_violation_threshold=semantic_violation_threshold,
+        semantic_gray_zone_threshold=semantic_gray_zone_threshold,
+    )
 
 
 def _resolve_raw_input(raw_input: str | None, inline_input: str | None) -> str:
@@ -164,8 +177,18 @@ def _cmd_decide(args: argparse.Namespace) -> int:
     cfg_effective = _llm_shadow_disabled(cfg, wait_shadow=bool(args.wait_shadow))
 
     constitution_path = Path(args.constitution_path) if args.constitution_path else None
+    constitution_cfg = cfg_effective.constitution_config
     constitution = (
-        _load_constitution(constitution_path) if constitution_path else _default_constitution()
+        _load_constitution(
+            constitution_path,
+            semantic_violation_threshold=constitution_cfg.semantic_violation_threshold,
+            semantic_gray_zone_threshold=constitution_cfg.semantic_gray_zone_threshold,
+        )
+        if constitution_path
+        else _default_constitution(
+            semantic_violation_threshold=constitution_cfg.semantic_violation_threshold,
+            semantic_gray_zone_threshold=constitution_cfg.semantic_gray_zone_threshold,
+        )
     )
 
     audit_path = Path(args.audit_path) if args.audit_path else None

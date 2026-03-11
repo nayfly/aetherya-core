@@ -122,6 +122,36 @@ class PolicyAdapterShadowConfig:
 
 
 @dataclass(frozen=True)
+class OutputGateConfig:
+    """
+    Configuration for the OutputGate response safety check.
+
+    require_candidate_response: if True, run_pipeline will fail-closed when called
+    without a candidate_response (response_text=None). Enforces that integrators
+    who want output protection actually wire up the response. Default: False (opt-in).
+    """
+
+    require_candidate_response: bool = False
+
+
+@dataclass(frozen=True)
+class ConstitutionConfig:
+    """
+    Configuration for the semantic layer of the Constitution evaluator.
+
+    Thresholds for SemanticEvaluator:
+    - semantic_violation_threshold: cosine similarity above this → clear violation
+    - semantic_gray_zone_threshold: cosine similarity above this (but below violation
+      threshold) → gray zone with reduced risk score
+
+    Defaults match the previously hardcoded values (0.55 / 0.35).
+    """
+
+    semantic_violation_threshold: float = 0.55
+    semantic_gray_zone_threshold: float = 0.35
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     version: int
     modes: dict[str, ModeConfig]
@@ -133,6 +163,8 @@ class PolicyConfig:
     llm_shadow: LLMShadowConfig
     policy_adapter_shadow: PolicyAdapterShadowConfig
     policy_fingerprint: str | None = None
+    output_gate_config: OutputGateConfig = field(default_factory=OutputGateConfig)
+    constitution_config: ConstitutionConfig = field(default_factory=ConstitutionConfig)
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -395,6 +427,32 @@ def _load_policy_adapter_shadow(raw: dict[str, Any] | None) -> PolicyAdapterShad
     )
 
 
+def _load_output_gate(raw: dict[str, Any] | None) -> OutputGateConfig:
+    data = raw or {}
+    return OutputGateConfig(
+        require_candidate_response=bool(data.get("require_candidate_response", False)),
+    )
+
+
+def _load_constitution_config(raw: dict[str, Any] | None) -> ConstitutionConfig:
+    data = raw or {}
+
+    violation_threshold = float(data.get("semantic_violation_threshold", 0.55))
+    gray_zone_threshold = float(data.get("semantic_gray_zone_threshold", 0.35))
+
+    if not (0.0 < violation_threshold <= 1.0):
+        raise ValueError("constitution.semantic_violation_threshold must be in (0.0, 1.0]")
+    if not (0.0 <= gray_zone_threshold < violation_threshold):
+        raise ValueError(
+            "constitution.semantic_gray_zone_threshold must be in [0.0, violation_threshold)"
+        )
+
+    return ConstitutionConfig(
+        semantic_violation_threshold=violation_threshold,
+        semantic_gray_zone_threshold=gray_zone_threshold,
+    )
+
+
 def load_policy_config(path: str | Path) -> PolicyConfig:
     path = Path(path)
     raw_text = path.read_text(encoding="utf-8")
@@ -431,6 +489,8 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
     confirmation = _load_confirmation(data.get("confirmation"))
     llm_shadow = _load_llm_shadow(data.get("llm_shadow"))
     policy_adapter_shadow = _load_policy_adapter_shadow(data.get("policy_adapter_shadow"))
+    output_gate_config = _load_output_gate(data.get("output_gate"))
+    constitution_config = _load_constitution_config(data.get("constitution"))
 
     return PolicyConfig(
         version=version,
@@ -443,4 +503,6 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
         llm_shadow=llm_shadow,
         policy_adapter_shadow=policy_adapter_shadow,
         policy_fingerprint=_policy_fingerprint(raw_text),
+        output_gate_config=output_gate_config,
+        constitution_config=constitution_config,
     )
