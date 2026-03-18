@@ -28,6 +28,16 @@ All notable changes to this project are documented in this file.
 - `Parser`: inputs like `"Can you delete all logs?"` or `"What does rm -rf do?"` were incorrectly classified as `intent=ask / mode=consultive` despite containing operative verbs. These now correctly resolve to `intent=operate / mode=operative`.
 - `SemanticEvaluator`: violation and gray-zone thresholds were hardcoded at `0.55` / `0.35` with no external configuration point.
 
+### Documentation
+
+- README split into focused pages under `docs/`: `architecture.md`, `security-model.md`, `policy-model.md`, `parser-and-input-boundary.md`, `output-gate.md`, `api.md`, `integrations.md`, `testing-and-benchmarks.md`, `release-and-verification.md`.
+- `docs/index.md` added as primary documentation entry point — project overview, mental model, position in stack, and doc map.
+- `docs/integrations.md` expanded with "Where ÆTHERYA sits", "What ÆTHERYA does not do", wrap-a-tool pattern, and decision state reference table.
+- `examples/basic_tool_wrapper.py` added — runnable end-to-end example of wrapping sensitive tools using real `AetheryaAPI` contracts. Demonstrates deny, allow, escalate, signed proof, and replay rejection.
+- `examples/agent_integration.py` added — simulated agent loop showing ÆTHERYA as the decision boundary between a proposed tool call and execution. Covers allow, block, hard_deny, and jailbreak cases.
+- `examples/policy.minimal.yaml` added — self-contained policy file for examples; no dependency on repo root CWD.
+- `assets/demo.gif` added — terminal recording of `agent_integration.py` embedded in README.
+
 ### Compatibility Notes
 
 - `PolicyConfig` gains two new optional fields with defaults: `output_gate_config: OutputGateConfig` and `constitution_config: ConstitutionConfig`. Existing callers constructing `PolicyConfig` directly must add these if not using keyword arguments, or migrate to `load_policy_config`.

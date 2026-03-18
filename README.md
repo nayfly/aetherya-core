@@ -41,6 +41,10 @@ LLM → policy/gates/confirmation → allow | deny | escalate → execution
 
 ---
 
+![ÆTHERYA demo](assets/demo.gif)
+
+---
+
 ## Quickstart
 
 ```bash
@@ -116,6 +120,8 @@ python -m aetherya.audit_verify --audit-path "$AUDIT" --require-chain --json \
 ---
 
 ## Documentation
+
+→ Full documentation index: **[docs/index.md](docs/index.md)**
 
 | Topic | Link |
 |-------|------|

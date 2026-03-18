@@ -127,7 +127,9 @@ safe_delete("/tmp/workfile.txt", actor="robert")
 safe_delete("/etc/passwd", actor="robert")
 ```
 
-For a runnable end-to-end example including the signed proof flow, see [`examples/basic_tool_wrapper.py`](../examples/basic_tool_wrapper.py).
+Runnable examples:
+- [`examples/basic_tool_wrapper.py`](../examples/basic_tool_wrapper.py) — end-to-end wrapper pattern including the signed proof flow
+- [`examples/agent_integration.py`](../examples/agent_integration.py) — simulated agent loop showing allow / block / escalate / hard_deny cases
 
 ---
 
