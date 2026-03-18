@@ -1,16 +1,14 @@
 # pip install -e ".[dev]"
 # python examples/basic_tool_wrapper.py
 #
-# Demonstrates wrapping sensitive tool calls with ÆTHERYA's decision pipeline.
+# Demonstrates wrapping sensitive tool calls behind ÆTHERYA.
+# Can be run from any directory — uses examples/policy.minimal.yaml.
 #
 # No external infrastructure required.
-# Cases 1–2 use the default policy (config/policy.yaml).
-# Cases 3–4 create a temporary policy in /tmp with signed_proof.enabled=true
-# to show the full confirmation flow (escalate → sign → allow → replay deny).
-# The temp file is cleaned up at the end.
+# Cases 1-2: default policy behavior.
+# Cases 3-5: signed proof flow (escalate → sign → allow → replay deny).
 
 import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -18,21 +16,18 @@ import yaml
 
 from aetherya.api import AetheryaAPI, APISettings
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-POLICY_PATH = Path("config/policy.yaml")
+POLICY_PATH = Path(__file__).parent / "policy.minimal.yaml"
 ACTOR = "robert"
 
 
 # ---------------------------------------------------------------------------
-# Tool wrappers
+# Tool wrappers — the pattern being demonstrated
 # ---------------------------------------------------------------------------
 
 
 def safe_delete(path: str, api: AetheryaAPI) -> str:
     """
-    Wraps a destructive delete operation behind ÆTHERYA.
+    Wraps a destructive delete behind ÆTHERYA.
     Raises PermissionError if the decision is not allowed.
     """
     raw = (
@@ -44,7 +39,7 @@ def safe_delete(path: str, api: AetheryaAPI) -> str:
     _, response = api.decide({"raw_input": raw, "actor": ACTOR, "wait_shadow": False})
     decision = response.get("decision", {})
     if not decision.get("allowed"):
-        raise PermissionError(f"Denied: {decision.get('reason')}  (state={decision.get('state')})")
+        raise PermissionError(decision.get("reason", decision.get("state")))
     # Simulated — no real deletion
     return f"[simulated] deleted {path}"
 
@@ -58,20 +53,15 @@ def safe_read(path: str, api: AetheryaAPI) -> str:
     _, response = api.decide({"raw_input": raw, "actor": ACTOR, "wait_shadow": False})
     decision = response.get("decision", {})
     if not decision.get("allowed"):
-        raise PermissionError(f"Denied: {decision.get('reason')}  (state={decision.get('state')})")
-    # Simulated
+        raise PermissionError(decision.get("reason", decision.get("state")))
     return f"[simulated] content of {path}"
 
 
 def safe_write(path: str, api: AetheryaAPI, proof: str | None = None) -> str:
     """
     Wraps a write operation.
-
-    When signed_proof.enabled=true in policy:
-    - Without proof → decision.state="escalate", allowed=False → PermissionError
-    - With valid proof → decision.state="allow", allowed=True → execution proceeds
-
-    proof is the approval_proof string emitted by AetheryaAPI.confirmation_sign().
+    - Without proof (signed_proof.enabled=true): state=escalate → PermissionError
+    - With valid proof: state=allow → execution proceeds
     """
     raw = (
         f"mode:operative tool:filesystem target:{path}"
@@ -84,71 +74,65 @@ def safe_write(path: str, api: AetheryaAPI, proof: str | None = None) -> str:
     _, response = api.decide({"raw_input": raw, "actor": ACTOR, "wait_shadow": False})
     decision = response.get("decision", {})
     if not decision.get("allowed"):
-        raise PermissionError(f"Denied: {decision.get('reason')}  (state={decision.get('state')})")
-    # Simulated — no real write
+        raise PermissionError(decision.get("reason", decision.get("state")))
     return f"[simulated] wrote to {path}"
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Output helpers
 # ---------------------------------------------------------------------------
 
 
-def _print(label: str, action: str, response: dict) -> None:
+def _case(n: int, title: str) -> None:
+    print(f"\n=== CASE {n}: {title} ===")
+
+
+def _result(action: str, response: dict) -> None:
     d = response.get("decision", {})
-    print(f"  action : {action}")
-    print(f"  allowed: {d.get('allowed')}")
-    print(f"  state  : {d.get('state')}")
-    print(f"  reason : {d.get('reason')}")
-    print()
-
-
-def _separator(title: str) -> None:
-    print(f"\n{'─' * 60}")
-    print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"  Action  : {action}")
+    print(f"  Allowed : {d.get('allowed')}")
+    print(f"  State   : {d.get('state')}")
+    print(f"  Reason  : {d.get('reason')}")
 
 
 # ---------------------------------------------------------------------------
-# Cases 1–2: default policy
+# Cases 1-2: standard policy behavior
 # ---------------------------------------------------------------------------
 
 
-def run_cases_default(api: AetheryaAPI) -> None:
-    # Case 1 — Destructive operation: ProceduralGuard blocks rm -rf /
-    _separator("Case 1 — dangerous operation (expect: deny or hard_deny)")
+def run_standard_cases(api: AetheryaAPI) -> None:
+    # Case 1 — Destructive command: ProceduralGuard → hard_deny
+    _case(1, "DESTRUCTIVE COMMAND")
     raw = "mode:operative tool:shell param.command=rm -rf / --no-preserve-root"
     _, response = api.decide({"raw_input": raw, "actor": ACTOR, "wait_shadow": False})
-    _print("1", raw, response)
-
+    _result(raw, response)
+    print()
     try:
-        # safe_delete on a system path → ProceduralGuard / risk aggregation blocks it
         safe_delete("/etc/passwd", api)
     except PermissionError as e:
-        print(f"  PermissionError: {e}\n")
+        print(f"  PermissionError raised: {e}")
 
-    # Case 2 — Normal consultive action: expected ALLOW or LOG_ONLY
-    # In consultive mode, non-operative inputs return state="log_only", allowed=True.
-    # log_only means: allowed, but the event is logged for review. Execution proceeds.
-    _separator("Case 2 — normal action (expect: allow or log_only)")
+    # Case 2 — Consultive read: allowed (state=log_only in consultive mode)
+    # log_only means: allowed=True, but the event is logged for review.
+    _case(2, "SAFE READ (consultive mode)")
     raw = "help user read the config file"
     _, response = api.decide({"raw_input": raw, "actor": ACTOR, "wait_shadow": False})
-    _print("2", raw, response)
-
+    _result(raw, response)
+    print()
     try:
         result = safe_read("/tmp/config.yaml", api)
-        print(f"  result : {result}\n")
+        print(f"  Result  : {result}")
     except PermissionError as e:
-        print(f"  PermissionError: {e}\n")
+        print(f"  PermissionError raised: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Cases 3–4: temp policy with signed_proof.enabled=true
+# Cases 3-5: confirmation flow (signed_proof.enabled=true)
 # ---------------------------------------------------------------------------
 
 
-def run_cases_confirmation() -> None:
-    # Build a temporary policy with signed_proof enabled (memory replay store)
+def run_confirmation_cases() -> None:
+    # Build a temp policy with signed_proof enabled (memory replay, single_use)
     raw_data = yaml.safe_load(POLICY_PATH.read_text())
     sp = raw_data["confirmation"]["evidence"]["signed_proof"]
     sp["enabled"] = True
@@ -172,54 +156,55 @@ def run_cases_confirmation() -> None:
         " param.confirm_context=approved_by_operator"
     )
 
-    # Case 3 — Sensitive write without proof (expect: escalate, allowed=False)
-    _separator("Case 3 — sensitive write, no proof (expect: escalate)")
+    # Case 3 — Write without proof: escalate (human approval required)
+    _case(3, "WRITE WITHOUT PROOF (confirmation required)")
     _, response = api.decide({"raw_input": write_raw, "actor": ACTOR, "wait_shadow": False})
-    _print("3", write_raw[:55] + "...", response)
-
+    _result("filesystem write /tmp/demo.txt", response)
+    print()
     try:
         safe_write("/tmp/demo.txt", api)
     except PermissionError as e:
-        print(f"  PermissionError: {e}\n")
+        print(f"  PermissionError raised: {e}")
 
-    # Sign the proof
+    # Sign an approval proof
     sign_status, sign_resp = api.confirmation_sign(
         {"raw_input": write_raw, "actor": ACTOR, "expires_in_sec": 60},
         headers={"x-aetherya-admin-key": admin_key},
         client_ip="127.0.0.1",
     )
     if sign_status != 200 or not sign_resp.get("ok"):
-        print(f"  [sign failed: {sign_resp}]")
+        print(f"\n  [sign failed: {sign_resp}]")
         tmp_policy.unlink(missing_ok=True)
         return
-
     proof = sign_resp["approval_proof"]
-    print(f"  [proof signed: {proof[:48]}...]\n")
+    print(f"\n  [proof signed: {proof[:48]}...]")
 
-    # Case 4 — Same write with valid proof (expect: allow)
-    _separator("Case 4 — sensitive write with signed proof (expect: allow)")
-    _, response = api.decide(
-        {
-            "raw_input": f"{write_raw} param.confirm_proof={proof}",
-            "actor": ACTOR,
-            "wait_shadow": False,
-        }
-    )
-    _print("4", write_raw[:55] + "...[+proof]", response)
-
-    # NOTE: the proof was already consumed by the decide() call above (single_use mode).
-    # safe_write() will try to use it again → replay rejected (expected and correct).
-    # In a real integration you would either:
-    #   a) call safe_write() with the proof directly (skip the manual decide() call above), or
-    #   b) sign a fresh proof for safe_write() separately.
+    # Case 4 — Write with valid proof: allow
+    _case(4, "WRITE WITH SIGNED PROOF")
     try:
         result = safe_write("/tmp/demo.txt", api, proof=proof)
-        print(f"  result : {result}\n")
+        # proof consumed above; sign a fresh one just for display
+        _, s2 = api.confirmation_sign(
+            {"raw_input": write_raw, "actor": ACTOR, "expires_in_sec": 60},
+            headers={"x-aetherya-admin-key": admin_key},
+            client_ip="127.0.0.1",
+        )
+        p2 = s2.get("approval_proof", "")
+        _, r2 = api.decide(
+            {
+                "raw_input": f"{write_raw} param.confirm_proof={p2}",
+                "actor": ACTOR,
+                "wait_shadow": False,
+            }
+        )
+        _result("filesystem write /tmp/demo.txt [+proof]", r2)
+        print()
+        print(f"  Result  : {result}")
     except PermissionError as e:
-        print(f"  PermissionError (proof already consumed — expected): {e}\n")
+        print(f"  PermissionError raised: {e}")
 
-    # Case 5 — Replay attempt with the same proof (expect: deny)
-    _separator("Case 5 — replay attack with consumed proof (expect: deny/escalate)")
+    # Case 5 — Replay the same consumed proof: denied
+    _case(5, "REPLAY ATTACK (same proof reused)")
     _, response = api.decide(
         {
             "raw_input": f"{write_raw} param.confirm_proof={proof}",
@@ -227,7 +212,7 @@ def run_cases_confirmation() -> None:
             "wait_shadow": False,
         }
     )
-    _print("5 [replay]", write_raw[:55] + "...[+proof]", response)
+    _result("filesystem write /tmp/demo.txt [replayed proof]", response)
 
     tmp_policy.unlink(missing_ok=True)
 
@@ -238,20 +223,10 @@ def run_cases_confirmation() -> None:
 
 
 def main() -> None:
-    if not POLICY_PATH.exists():
-        print(
-            f"Policy not found: {POLICY_PATH}\n"
-            "Run from the repo root:  python examples/basic_tool_wrapper.py",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
     api = AetheryaAPI(APISettings(policy_path=POLICY_PATH, audit_path=None))
-
-    run_cases_default(api)
-    run_cases_confirmation()
-
-    print("\n✓ done\n")
+    run_standard_cases(api)
+    run_confirmation_cases()
+    print("\n=== DONE ===\n")
 
 
 if __name__ == "__main__":

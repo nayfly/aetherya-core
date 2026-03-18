@@ -1,21 +1,31 @@
 # Integrations
 
-## Position in the stack
+## Where ÆTHERYA sits
 
-ÆTHERYA is a **decision boundary**, not an orchestrator or LLM.
-You call it before executing any sensitive tool action and branch on the result:
+ÆTHERYA is a **decision boundary** that sits between a proposed action and its execution.
 
 ```
-LLM proposes action
-      ↓
-  api.decide(raw_input, actor)        ← ÆTHERYA
-      ↓
-  decision.allowed == True  → execute tool
-  decision.state == "escalate"        → request human approval → sign proof → retry
-  decision.allowed == False           → surface reason, do not execute
+Agent / LLM proposes action
+           ↓
+       api.decide({"raw_input": ..., "actor": ...})
+           ↓
+  decision["allowed"] == True   → execute tool
+  decision["state"]  == "escalate"  → request human approval → sign proof → retry
+  decision["allowed"] == False  → block, surface reason to agent or user
+           ↓
+  your execution layer
 ```
 
-It does not call tools, does not orchestrate agents, and does not block non-sensitive operations.
+It does not call tools, orchestrate agents, or make network requests on your behalf.
+
+## What ÆTHERYA does not do
+
+- **Does not execute actions.** It only decides. Execution is always in your code.
+- **Does not replace your agent framework.** It gates individual actions, not the loop.
+- **Does not have opinions about your tools.** You configure the allowlist and capability matrix.
+- **Does not block non-operative inputs.** Consultive/informational inputs pass through with `log_only`.
+- **Does not require a running server.** The Python API (`AetheryaAPI`) is an in-process call.
+- **Does not involve an LLM in the decision.** The pipeline is fully deterministic. The LLM shadow is telemetry only, off by default.
 
 ---
 
@@ -121,40 +131,9 @@ For a runnable end-to-end example including the signed proof flow, see [`example
 
 ---
 
-## Python (Direct API)
-
-Minimal integration — no HTTP server needed:
-
-```python
-from pathlib import Path
-from aetherya.api import APISettings, AetheryaAPI
-
-api = AetheryaAPI(
-    APISettings(
-        policy_path=Path("config/policy.yaml"),
-        audit_path=Path("audit/decisions.jsonl"),
-        default_actor="robert",
-    )
-)
-
-status, payload = api.decide({
-    "raw_input": "mode:operative tool:filesystem target:/tmp param.path=/tmp/demo.txt param.operation=write",
-    "actor": "robert",
-    "wait_shadow": False,
-})
-
-decision = payload.get("decision", {})
-if status == 200 and decision.get("allowed"):
-    # Execute your tool here
-    pass
-else:
-    # Escalate, ask for confirmation, or return safe fallback
-    pass
-```
-
 ### With OutputGate
 
-Pass the candidate response to check for PII/toxic content before delivery:
+Pass `candidate_response` to check the reply for PII or toxic content before delivery:
 
 ```python
 status, payload = api.decide({

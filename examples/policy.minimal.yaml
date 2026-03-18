@@ -1,0 +1,142 @@
+# Minimal policy for running examples/ without depending on the repo root.
+# Used by: examples/basic_tool_wrapper.py, examples/agent_integration.py
+#
+# This is a self-contained copy of the default config with no changes to
+# security thresholds or behavior. It is equivalent to config/policy.yaml.
+# Do not use in production — copy and harden for your deployment.
+
+version: 1
+
+modes:
+  consultive:
+    default_state: log_only
+    thresholds:
+      deny_at: 90
+      confirm_at: 60
+      log_only_at: 0
+
+  operative:
+    default_state: allow
+    thresholds:
+      deny_at: 80
+      confirm_at: 50
+      log_only_at: 0
+
+aggregator:
+  weights:
+    execution_gate: 1.0
+    capability_gate: 1.0
+    jailbreak_guard: 1.0
+    procedural_guard: 1.0
+    constitution: 1.0
+  hard_deny_if:
+    - critical_tag_detected
+    - "tag:jailbreak_attempt"
+    - "tag:tool_not_allowed"
+    - "tag:capability_tool_denied"
+
+procedural_guard:
+  critical_tags:
+    - "rm -rf /"
+    - "mkfs"
+    - ":(){:|:&};:"
+  privileged_ops:
+    - "apt remove"
+    - "apt purge"
+    - "userdel"
+    - "chmod -R 777 /"
+
+execution_gate:
+  enabled: true
+  allowed_tools:
+    - shell
+    - http
+    - filesystem
+  require_target_for_operate: false
+  required_parameters:
+    shell:
+      - command
+  allowed_parameters:
+    shell:
+      - command
+      - timeout
+    http:
+      - method
+      - url
+      - body
+    filesystem:
+      - path
+      - operation
+      - confirm_token
+      - confirm_context
+
+capability_matrix:
+  enabled: true
+  default_allow: false
+  roles:
+    operator:
+      tools:
+        - shell
+        - http
+        - filesystem
+      operations:
+        - read
+        - write
+        - append
+        - list
+        - request
+        - command
+  actors:
+    robert:
+      roles:
+        - operator
+      tools: []
+      operations: []
+
+confirmation:
+  enabled: true
+  on_confirmed: allow
+  require_for:
+    decisions:
+      - require_confirm
+    tools: []
+    operations:
+      - delete
+      - write
+    min_risk_score: 0
+  evidence:
+    token_param: confirm_token
+    context_param: confirm_context
+    token_pattern: "^ack:[a-z0-9_-]{8,}$"
+    min_context_length: 12
+    signed_proof:
+      enabled: false
+      proof_param: confirm_proof
+      key_env: AETHERYA_CONFIRMATION_HMAC_KEY
+      keyring_env: AETHERYA_CONFIRMATION_HMAC_KEYRING
+      active_kid: k1
+      max_valid_for_sec: 900
+      clock_skew_sec: 5
+      replay_mode: single_use
+      replay_store: memory
+      replay_redis_url_env: AETHERYA_CONFIRMATION_REPLAY_REDIS_URL
+      replay_redis_prefix: aetherya:appr
+
+llm_shadow:
+  enabled: false
+  provider: dry_run
+  model: gpt-dry
+  temperature: 0.0
+  max_tokens: 96
+  timeout_sec: 10.0
+
+policy_adapter_shadow:
+  enabled: false
+  max_signals: 3
+
+output_gate:
+  require_candidate_response: false
+
+constitution:
+  semantic_violation_threshold: 0.55
+  semantic_gray_zone_threshold: 0.35
