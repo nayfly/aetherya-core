@@ -7,6 +7,7 @@
 # No LLM, no external framework, no infrastructure required.
 # Uses examples/policy.minimal.yaml — can be run from any directory.
 
+import time
 from pathlib import Path
 
 from aetherya.api import AetheryaAPI, APISettings
@@ -105,6 +106,8 @@ def agent_loop() -> None:
             print(f"  {BLOCK_MESSAGES.get(state, '→ EXECUTE  (action proceeds — simulated)')}")
         else:
             print(f"  {BLOCK_MESSAGES.get(state, '→ BLOCK    (rejected)')}")
+
+        time.sleep(0.8)
 
     print("\n" + "=" * 65)
     print("Done. No tool was executed — ÆTHERYA is the decision boundary.")

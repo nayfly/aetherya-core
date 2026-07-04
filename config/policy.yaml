@@ -134,9 +134,12 @@ policy_adapter_shadow:
 output_gate:
   require_candidate_response: false
 
-# Constitution semantic evaluator thresholds.
-# These govern the SemanticEvaluator (active only when use_semantic=True).
+# Constitution evaluator configuration.
+# use_semantic: activate the SemanticEvaluator (all-MiniLM-L6-v2) for inputs that
+#   Fast keyword matching cannot resolve definitively. Enabled by default.
+# Thresholds govern the SemanticEvaluator similarity cutoffs.
 # Modify with care: lowering thresholds increases sensitivity and false-positive risk.
 constitution:
+  use_semantic: true
   semantic_violation_threshold: 0.55
   semantic_gray_zone_threshold: 0.35

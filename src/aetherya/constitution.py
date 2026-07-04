@@ -61,10 +61,15 @@ def _to_pipeline_result(evaluator_result: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _default_model_factory(model_name: str) -> Any:
-    from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
+_MODEL_CACHE: dict[str, Any] = {}
 
-    return SentenceTransformer(model_name)
+
+def _default_model_factory(model_name: str) -> Any:
+    if model_name not in _MODEL_CACHE:
+        from sentence_transformers import SentenceTransformer  # type: ignore[import-untyped]
+
+        _MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+    return _MODEL_CACHE[model_name]
 
 
 # ---------------------------------------------------------------------------
@@ -77,20 +82,54 @@ class FastKeywordEvaluator:
         self._principles = principles
 
     def evaluate(self, text: str) -> dict[str, Any]:
+        first_violation: Principle | None = None
+        total_matches: int = 0
+        name_match: bool = False
+        keyword_found_negated: bool = False
+
         for p in self._principles:
             for kw in p.keywords:
                 kw_lower = kw.lower()
                 pos = text.find(kw_lower)
-                if pos != -1 and not _has_negation_before(text, pos):
-                    return {
-                        "allowed": False,
-                        "violated_principle": p.name,
-                        "risk_score": min(100, max(1, p.risk)),
-                        "reason": f"Violates principle: {p.name}",
-                        "confidence": 0.9,
-                        "ambiguous": False,
-                        "tags": [],
-                    }
+                if pos == -1:
+                    continue
+                if not _has_negation_before(text, pos):
+                    total_matches += 1
+                    if kw_lower in p.name.lower():
+                        name_match = True
+                    if first_violation is None:
+                        first_violation = p
+                else:
+                    keyword_found_negated = True
+
+        if first_violation is not None:
+            if name_match:
+                confidence = 0.9
+            elif total_matches >= 2:
+                confidence = 0.85
+            else:
+                confidence = 0.7
+            return {
+                "allowed": False,
+                "violated_principle": first_violation.name,
+                "risk_score": min(100, max(1, first_violation.risk)),
+                "reason": f"Violates principle: {first_violation.name}",
+                "confidence": confidence,
+                "ambiguous": False,
+                "tags": [],
+            }
+
+        # A keyword was present but negated → definitive allow, no semantic escalation needed.
+        if keyword_found_negated:
+            return {
+                "allowed": True,
+                "violated_principle": None,
+                "risk_score": 0,
+                "reason": "No violations detected",
+                "confidence": 0.9,
+                "ambiguous": False,
+                "tags": [],
+            }
 
         token_count = len(text.split())
         if token_count < 10:
@@ -164,6 +203,7 @@ class SemanticEvaluator:
                 "confidence": 0.8,
                 "ambiguous": False,
                 "tags": [],
+                "semantic_score": 0.0,
             }
 
         query_emb: Any = self._model.encode([text])[0]
@@ -188,6 +228,7 @@ class SemanticEvaluator:
                 "confidence": best_sim,
                 "ambiguous": False,
                 "tags": [],
+                "semantic_score": best_sim,
             }
 
         if best_p is not None and best_sim > self._gray_zone_threshold:
@@ -199,6 +240,7 @@ class SemanticEvaluator:
                 "confidence": best_sim,
                 "ambiguous": False,
                 "tags": [],
+                "semantic_score": best_sim,
             }
 
         return {
@@ -209,6 +251,7 @@ class SemanticEvaluator:
             "confidence": 0.8,
             "ambiguous": False,
             "tags": [],
+            "semantic_score": best_sim,
         }
 
 
@@ -222,7 +265,7 @@ class Constitution:
         self,
         principles: list[Principle],
         audit: AuditLogger | None = None,
-        use_semantic: bool = False,
+        use_semantic: bool = True,
         semantic_violation_threshold: float = 0.55,
         semantic_gray_zone_threshold: float = 0.35,
     ) -> None:

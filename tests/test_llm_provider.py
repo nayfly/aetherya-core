@@ -552,3 +552,244 @@ def test_openai_provider_rejects_completion_with_empty_choices(
 def test_openai_finish_reason_and_coerce_helpers_cover_stop_branch() -> None:
     assert llm_provider._map_openai_finish_reason("unexpected") == "stop"  # noqa: SLF001
     assert llm_provider._coerce_int("bad", 5) == 5  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# _parse_shadow_response
+# ---------------------------------------------------------------------------
+
+
+def test_parse_shadow_response_valid_json_returns_parsed_values() -> None:
+    score, reasoning, flags, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": 72, "reasoning": "looks risky", "flags": ["harmful", "irreversible"]}'
+    )
+    assert score == 72
+    assert reasoning == "looks risky"
+    assert flags == ["harmful", "irreversible"]
+    assert err is None
+
+
+def test_parse_shadow_response_clamps_score_above_100() -> None:
+    score, _, _, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": 150, "reasoning": "x", "flags": []}'
+    )
+    assert score == 100
+    assert err is None
+
+
+def test_parse_shadow_response_clamps_score_below_0() -> None:
+    score, _, _, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": -5, "reasoning": "x", "flags": []}'
+    )
+    assert score == 0
+    assert err is None
+
+
+def test_parse_shadow_response_strips_json_fences() -> None:
+    text = '```json\n{"risk_score": 30, "reasoning": "ok", "flags": []}\n```'
+    score, reasoning, flags, err = llm_provider._parse_shadow_response(text)  # noqa: SLF001
+    assert score == 30
+    assert err is None
+
+
+def test_parse_shadow_response_strips_plain_fences() -> None:
+    text = '```\n{"risk_score": 10, "reasoning": "fine", "flags": ["pii_exposure"]}\n```'
+    score, _, flags, err = llm_provider._parse_shadow_response(text)  # noqa: SLF001
+    assert score == 10
+    assert flags == ["pii_exposure"]
+    assert err is None
+
+
+def test_parse_shadow_response_invalid_json_returns_fallback_50() -> None:
+    score, reasoning, flags, err = llm_provider._parse_shadow_response("not json at all")
+    assert score == llm_provider._SHADOW_FALLBACK_SCORE  # noqa: SLF001
+    assert reasoning == ""
+    assert flags == []
+    assert err is not None
+    assert "json_parse_error" in err
+
+
+def test_parse_shadow_response_non_dict_returns_fallback() -> None:
+    score, _, _, err = llm_provider._parse_shadow_response("[1, 2, 3]")  # noqa: SLF001
+    assert score == llm_provider._SHADOW_FALLBACK_SCORE  # noqa: SLF001
+    assert err is not None
+
+
+def test_parse_shadow_response_bad_risk_score_type_returns_fallback() -> None:
+    score, _, _, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": "high", "reasoning": "x", "flags": []}'
+    )
+    assert score == llm_provider._SHADOW_FALLBACK_SCORE  # noqa: SLF001
+    assert err is not None
+
+
+def test_parse_shadow_response_coerces_float_risk_score() -> None:
+    # Floats that can be cast to int are accepted
+    score, _, _, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": 45.9, "reasoning": "ok", "flags": []}'
+    )
+    assert score == 45
+    assert err is None
+
+
+def test_parse_shadow_response_filters_non_string_flags() -> None:
+    score, _, flags, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": 20, "reasoning": "ok", "flags": ["harmful", 42, null, "pii_exposure"]}'
+    )
+    assert flags == ["harmful", "pii_exposure"]
+    assert err is None
+
+
+def test_parse_shadow_response_missing_optional_fields_use_defaults() -> None:
+    score, reasoning, flags, err = llm_provider._parse_shadow_response(  # noqa: SLF001
+        '{"risk_score": 55}'
+    )
+    assert score == 55
+    assert reasoning == ""
+    assert flags == []
+    assert err is None
+
+
+# ---------------------------------------------------------------------------
+# OpenAILLMProvider — JSON response integration
+# ---------------------------------------------------------------------------
+
+
+def _make_openai_stub(content: str, monkeypatch: pytest.MonkeyPatch) -> OpenAILLMProvider:
+    """Helper: patch sys.modules and return a pre-wired OpenAILLMProvider."""
+
+    class FakeUsage:
+        prompt_tokens = 10
+        completion_tokens = 8
+        total_tokens = 18
+
+    class FakeMessage:
+        pass
+
+    FakeMessage.content = content  # type: ignore[attr-defined]
+
+    class FakeChoice:
+        message = FakeMessage()
+        finish_reason = "stop"
+
+    class FakeCompletion:
+        id = "chatcmpl-json-test"
+        model = "gpt-4o-mini"
+        usage = FakeUsage()
+        choices = [FakeChoice()]
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003,ANN202
+            return FakeCompletion()
+
+    class FakeChat:
+        def __init__(self) -> None:
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = FakeChat()
+
+    import types
+
+    fake_module = types.ModuleType("openai")
+    fake_module.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+    return OpenAILLMProvider(api_key="sk-test")
+
+
+def test_openai_provider_uses_parsed_json_risk_score(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _make_openai_stub(
+        '{"risk_score": 83, "reasoning": "destructive op", "flags": ["irreversible"]}',
+        monkeypatch,
+    )
+    request = LLMRequest(
+        model="gpt-4o-mini",
+        messages=[LLMMessage(role="user", content="delete everything")],
+        max_tokens=64,
+    )
+    response = provider.generate(request)
+    assert response.metadata["suggested_risk_score"] == 83
+    assert response.metadata["suggested_state"] == "deny"
+    assert response.metadata["llm_parse_success"] is True
+    assert response.metadata["llm_reasoning"] == "destructive op"
+    assert response.metadata["llm_flags"] == ["irreversible"]
+    assert "llm_parse_error" not in response.metadata
+
+
+def test_openai_provider_fallback_50_on_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _make_openai_stub("sorry, I cannot evaluate that", monkeypatch)
+    request = LLMRequest(
+        model="gpt-4o-mini",
+        messages=[LLMMessage(role="user", content="do something")],
+        max_tokens=64,
+    )
+    response = provider.generate(request)
+    assert response.metadata["suggested_risk_score"] == llm_provider._SHADOW_FALLBACK_SCORE
+    assert response.metadata["suggested_state"] == "require_confirm"
+    assert response.metadata["llm_parse_success"] is False
+    assert "llm_parse_error" in response.metadata
+
+
+def test_openai_provider_shadow_messages_include_system_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The messages sent to OpenAI must use the shadow system prompt."""
+    captured: dict[str, object] = {}
+
+    class FakeUsage:
+        prompt_tokens = 5
+        completion_tokens = 5
+        total_tokens = 10
+
+    class FakeMessage:
+        content = '{"risk_score": 0, "reasoning": "safe", "flags": []}'
+
+    class FakeChoice:
+        message = FakeMessage()
+        finish_reason = "stop"
+
+    class FakeCompletion:
+        id = "chatcmpl-prompt-check"
+        model = "gpt-4o-mini"
+        usage = FakeUsage()
+        choices = [FakeChoice()]
+
+    class FakeCompletions:
+        def create(self, **kwargs):  # noqa: ANN003,ANN202
+            captured["messages"] = kwargs["messages"]
+            return FakeCompletion()
+
+    class FakeChat:
+        def __init__(self) -> None:
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.chat = FakeChat()
+
+    import types
+
+    fake_module = types.ModuleType("openai")
+    fake_module.OpenAI = FakeOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", fake_module)
+
+    provider = OpenAILLMProvider(api_key="sk-test")
+    request = LLMRequest(
+        model="gpt-4o-mini",
+        messages=[
+            LLMMessage(role="system", content="Shadow mode only."),
+            LLMMessage(role="user", content="run rm -rf /tmp"),
+        ],
+        max_tokens=64,
+        metadata={"mode": "operative", "state": "deny", "core_risk_score": 95},
+    )
+    provider.generate(request)
+
+    messages = captured["messages"]
+    assert isinstance(messages, list) and len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert "risk_score" in messages[0]["content"]  # system prompt references the JSON schema
+    assert messages[1]["role"] == "user"
+    assert "run rm -rf /tmp" in messages[1]["content"]
+    assert "Core risk score: 95" in messages[1]["content"]

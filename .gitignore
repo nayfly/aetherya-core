@@ -13,3 +13,6 @@ egg-info/
 historia/
 # Runtime artifacts
 audit/
+CLAUDE.md
+.claude/
+demo.cast

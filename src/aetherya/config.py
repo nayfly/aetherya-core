@@ -137,7 +137,10 @@ class OutputGateConfig:
 @dataclass(frozen=True)
 class ConstitutionConfig:
     """
-    Configuration for the semantic layer of the Constitution evaluator.
+    Configuration for the Constitution evaluator.
+
+    use_semantic: enable the SemanticEvaluator layer (all-MiniLM-L6-v2).
+      True by default. Set to false to use FastKeywordEvaluator only.
 
     Thresholds for SemanticEvaluator:
     - semantic_violation_threshold: cosine similarity above this → clear violation
@@ -147,6 +150,7 @@ class ConstitutionConfig:
     Defaults match the previously hardcoded values (0.55 / 0.35).
     """
 
+    use_semantic: bool = True
     semantic_violation_threshold: float = 0.55
     semantic_gray_zone_threshold: float = 0.35
 
@@ -437,6 +441,7 @@ def _load_output_gate(raw: dict[str, Any] | None) -> OutputGateConfig:
 def _load_constitution_config(raw: dict[str, Any] | None) -> ConstitutionConfig:
     data = raw or {}
 
+    use_semantic = bool(data.get("use_semantic", True))
     violation_threshold = float(data.get("semantic_violation_threshold", 0.55))
     gray_zone_threshold = float(data.get("semantic_gray_zone_threshold", 0.35))
 
@@ -448,6 +453,7 @@ def _load_constitution_config(raw: dict[str, Any] | None) -> ConstitutionConfig:
         )
 
     return ConstitutionConfig(
+        use_semantic=use_semantic,
         semantic_violation_threshold=violation_threshold,
         semantic_gray_zone_threshold=gray_zone_threshold,
     )

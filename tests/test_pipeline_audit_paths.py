@@ -83,6 +83,74 @@ def test_pipeline_audit_log_is_called_on_success(monkeypatch: pytest.MonkeyPatch
     assert audit.events[0]["context"]["policy_fingerprint"] == "sha256:test-policy"
 
 
+def test_pipeline_audit_context_includes_constitution_semantic_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    class AggResult:
+        decision = RiskDecision.ALLOW
+        total_score = 0
+        reasons = ["ok"]
+        top_signal = None
+        breakdown = []
+
+    class Agg:
+        def __init__(self, *_a, **_k):  # noqa: ANN001
+            pass
+
+        def aggregate(self, _signals, mode: str):  # noqa: ANN001
+            return AggResult()
+
+    monkeypatch.setattr(pipeline, "RiskAggregator", Agg)
+
+    class SemanticConstitution:
+        def evaluate(self, action, actor: str, context: dict):  # noqa: ANN001
+            return {
+                "allowed": True,
+                "risk_score": 0,
+                "reason": "ok",
+                "tags": [],
+                "semantic_score": 0.42,
+            }
+
+    audit = AuditOK()
+    d = run_pipeline(
+        "mode:operative hi", SemanticConstitution(), actor="robert", cfg=DummyCfg(), audit=audit
+    )
+    assert d.allowed is True
+    assert audit.events[0]["context"]["constitution"] == {"semantic_score": 0.42}
+
+
+def test_pipeline_audit_context_omits_constitution_block_without_semantic_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    class AggResult:
+        decision = RiskDecision.ALLOW
+        total_score = 0
+        reasons = ["ok"]
+        top_signal = None
+        breakdown = []
+
+    class Agg:
+        def __init__(self, *_a, **_k):  # noqa: ANN001
+            pass
+
+        def aggregate(self, _signals, mode: str):  # noqa: ANN001
+            return AggResult()
+
+    monkeypatch.setattr(pipeline, "RiskAggregator", Agg)
+
+    audit = AuditOK()
+    d = run_pipeline(
+        "mode:operative hi", DummyConstitution(), actor="robert", cfg=DummyCfg(), audit=audit
+    )
+    assert d.allowed is True
+    assert "constitution" not in audit.events[0]["context"]
+
+
 def test_pipeline_audit_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     import aetherya.pipeline as pipeline
 

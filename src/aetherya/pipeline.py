@@ -460,11 +460,15 @@ def run_pipeline(
         )
 
     # 6) Constitución (fail-closed si peta)
+    constitution_extra: dict[str, Any] = {}
     try:
         constitution_context: dict[str, Any] = {"mode": mode.value}
         if policy_fingerprint:
             constitution_context["policy_fingerprint"] = policy_fingerprint
         c = constitution.evaluate(action, actor=actor, context=constitution_context)
+        sem_score = c.get("semantic_score")
+        if sem_score is not None:
+            constitution_extra["semantic_score"] = float(sem_score)
         signals.append(
             RiskSignal(
                 source="constitution",
@@ -670,6 +674,7 @@ def run_pipeline(
                     "state": final.state,
                     "decision_reason": final.reason,
                     "policy_fingerprint": policy_fingerprint,
+                    "core_risk_score": final.risk_score,
                 },
             )
 
@@ -821,6 +826,8 @@ def run_pipeline(
             }
             if explainability:
                 context["explainability"] = explainability
+            if constitution_extra:
+                context["constitution"] = constitution_extra
             if output_gate:
                 context["output_gate"] = output_gate
             if llm_shadow:

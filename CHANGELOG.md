@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `Constitution`: semantic evaluation layer is now enabled by default (`use_semantic=True`). Configurable via new `constitution.use_semantic` flag in `policy.yaml` (set to `false` to run FastKeywordEvaluator only).
+- `Constitution`: module-level model cache in `_default_model_factory` — the SentenceTransformer instance is loaded once per model name and shared across all `SemanticEvaluator` instances in the process.
+- `FastKeywordEvaluator`: graduated confidence based on match evidence — `0.9` when a matched keyword appears in the principle name, `0.85` when two or more keywords match, `0.7` for a single keyword match. All matches are collected before deciding (previously stopped at first match).
+- `FastKeywordEvaluator`: a keyword found only in negated form (e.g. "how to prevent delete accidents") now returns a definitive allow with `confidence=0.9`, skipping semantic escalation.
+- `SemanticEvaluator`: new `semantic_score` field in evaluation results (cosine similarity of best-matching principle). Propagated by the pipeline to the audit trace as `context.constitution.semantic_score` when present.
+- LLM shadow: `OpenAILLMProvider` now performs a real ethical evaluation instead of hash-derived telemetry. Sends a structured system prompt requesting JSON (`risk_score` 0–100, `reasoning`, `flags` from a fixed vocabulary) with pipeline context (mode, decision state, reason, core risk score). Response parsing strips markdown fences and falls back to a neutral score of 50 on any parse failure (`llm_parse_error` recorded in metadata). Metadata enriched with `llm_reasoning`, `llm_flags`, `llm_parse_success`.
+- Pipeline: `core_risk_score` added to the LLM shadow request metadata so the shadow evaluator can compare against the deterministic decision.
+
+### Changed
+
+- `Constitution.__init__`: `use_semantic` default changed from `False` to `True`. Callers that need keyword-only evaluation must pass `use_semantic=False` explicitly or set `constitution.use_semantic: false` in policy.
+- LLM shadow `suggested_risk_score` is no longer derived from a hash of the response text; it is the model-reported `risk_score` (or 50 on parse failure). `ethical_divergence.risk_delta` is now meaningful.
+
 ## v0.8.0 - 2026-03-11
 
 ### Security

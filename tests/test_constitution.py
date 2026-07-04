@@ -137,8 +137,49 @@ def test_fast_evaluator_keyword_without_negation_triggers() -> None:
     result = ev.evaluate("delete all files")
     assert result["allowed"] is False
     assert result["violated_principle"] == "Ops"
-    assert result["confidence"] == 0.9
+    # 1 keyword matched, keyword not in principle name "Ops" → confidence 0.7
+    assert result["confidence"] == 0.7
     assert result["ambiguous"] is False
+
+
+def test_fast_evaluator_two_keyword_matches_give_higher_confidence() -> None:
+    """Matching 2+ keywords → confidence bumped to 0.85."""
+    p1 = Principle("Harm", "no harm", priority=1, keywords=["kill", "attack"], risk=80)
+    ev = FastKeywordEvaluator([p1])
+    result = ev.evaluate("kill and attack now")
+    assert result["allowed"] is False
+    assert result["confidence"] == 0.85
+
+
+def test_fast_evaluator_keyword_in_principle_name_gives_highest_confidence() -> None:
+    """Keyword appears as substring of principle name → confidence 0.9."""
+    p = Principle("DataProtection", "no data leak", priority=1, keywords=["data"], risk=75)
+    ev = FastKeywordEvaluator([p])
+    result = ev.evaluate("data breach attempt")
+    assert result["allowed"] is False
+    assert result["confidence"] == 0.9
+
+
+def test_fast_evaluator_negation_returns_definitive_allow_not_ambiguous() -> None:
+    """Negated keyword must return ambiguous=False so semantic layer is not invoked."""
+    p = Principle("Ops", "no deletes", priority=1, keywords=["delete"], risk=80)
+    ev = FastKeywordEvaluator([p])
+    result = ev.evaluate("how to prevent delete accidents")
+    assert result["allowed"] is True
+    assert result["ambiguous"] is False
+
+
+def test_fast_evaluator_nonnegated_wins_over_negated_in_same_input() -> None:
+    """If one keyword is negated but another is clear violation, violation takes precedence."""
+    p1 = Principle("Ops", "safe", priority=1, keywords=["delete"], risk=80)
+    p2 = Principle("Harm", "no attack", priority=2, keywords=["attack"], risk=90)
+    ev = FastKeywordEvaluator([p1, p2])
+    # "prevent" negates "delete" (within 5-token window); "attack" is 7 tokens away → not negated
+    result = ev.evaluate(
+        "please prevent accidental delete operations but the attack must be stopped"
+    )
+    assert result["allowed"] is False
+    assert result["violated_principle"] == "Harm"
 
 
 def test_fast_evaluator_short_text_is_ambiguous() -> None:
@@ -410,6 +451,80 @@ def test_constitution_with_audit_logs_result(tmp_path: pytest.TempPathFactory) -
     core.evaluate(_action("attack now"), actor="alice")
     lines = audit_path.read_text().strip().splitlines()
     assert len(lines) == 1
+
+
+# ---------------------------------------------------------------------------
+# SemanticEvaluator — semantic_score field
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_evaluator_includes_semantic_score_on_violation() -> None:
+    ev = _sem_evaluator(similarity=0.8)
+    result = ev.evaluate("dangerous request")
+    assert "semantic_score" in result
+    assert abs(result["semantic_score"] - 0.8) < 0.01
+
+
+def test_semantic_evaluator_includes_semantic_score_on_gray_zone() -> None:
+    ev = _sem_evaluator(similarity=0.45)
+    result = ev.evaluate("borderline input")
+    assert "semantic_score" in result
+    assert abs(result["semantic_score"] - 0.45) < 0.01
+
+
+def test_semantic_evaluator_includes_semantic_score_on_clean() -> None:
+    ev = _sem_evaluator(similarity=0.1)
+    result = ev.evaluate("help me with documents")
+    assert "semantic_score" in result
+    assert abs(result["semantic_score"] - 0.1) < 0.01
+
+
+def test_semantic_evaluator_includes_semantic_score_when_no_principles() -> None:
+    ev = SemanticEvaluator([], model_factory=lambda _: _make_mock_model())
+    result = ev.evaluate("anything")
+    assert "semantic_score" in result
+    assert result["semantic_score"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _MODEL_CACHE — module-level model caching
+# ---------------------------------------------------------------------------
+
+
+def test_model_cache_reuses_loaded_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_default_model_factory should call SentenceTransformer only once per model name."""
+    import aetherya.constitution as c_mod
+
+    call_count = {"n": 0}
+    mock_model = _make_mock_model(0.1)
+
+    def counting_factory(name: str) -> Any:  # noqa: ANN001
+        call_count["n"] += 1
+        return mock_model
+
+    # Patch the module-level cache and factory together
+    monkeypatch.setattr(c_mod, "_MODEL_CACHE", {})
+
+    def patched_factory(model_name: str) -> Any:
+        if model_name not in c_mod._MODEL_CACHE:  # noqa: SLF001
+            c_mod._MODEL_CACHE[model_name] = counting_factory(model_name)  # noqa: SLF001
+        return c_mod._MODEL_CACHE[model_name]  # noqa: SLF001
+
+    monkeypatch.setattr(c_mod, "_default_model_factory", patched_factory)
+
+    ev1 = SemanticEvaluator(
+        [Principle("P", "desc", priority=1, keywords=[], risk=50)],
+        model_name="shared-model",
+    )
+    ev2 = SemanticEvaluator(
+        [Principle("P", "desc", priority=1, keywords=[], risk=50)],
+        model_name="shared-model",
+    )
+
+    ev1.evaluate("test one")
+    ev2.evaluate("test two")
+
+    assert call_count["n"] == 1  # loaded once, shared on second call
 
 
 # ---------------------------------------------------------------------------

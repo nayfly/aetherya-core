@@ -20,7 +20,7 @@ def make_core() -> Constitution:
                 "Need confirmation for sensitive requests",
                 priority=1,
                 keywords=["sensitive"],
-                risk=55,
+                risk=72,
             )
         ]
     )

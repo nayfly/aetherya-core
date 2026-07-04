@@ -33,6 +33,7 @@ from aetherya.verify_release_artifacts import main as verify_release_artifacts_m
 def _default_constitution(
     semantic_violation_threshold: float = 0.55,
     semantic_gray_zone_threshold: float = 0.35,
+    use_semantic: bool = True,
 ) -> Constitution:
     return Constitution(
         [
@@ -65,6 +66,7 @@ def _default_constitution(
                 risk=92,
             ),
         ],
+        use_semantic=use_semantic,
         semantic_violation_threshold=semantic_violation_threshold,
         semantic_gray_zone_threshold=semantic_gray_zone_threshold,
     )
@@ -74,6 +76,7 @@ def _load_constitution(
     path: Path,
     semantic_violation_threshold: float = 0.55,
     semantic_gray_zone_threshold: float = 0.35,
+    use_semantic: bool = True,
 ) -> Constitution:
     if not path.exists():
         raise ValueError(f"constitution file not found: {path}")
@@ -117,6 +120,7 @@ def _load_constitution(
         )
     return Constitution(
         principles,
+        use_semantic=use_semantic,
         semantic_violation_threshold=semantic_violation_threshold,
         semantic_gray_zone_threshold=semantic_gray_zone_threshold,
     )
@@ -183,11 +187,13 @@ def _cmd_decide(args: argparse.Namespace) -> int:
             constitution_path,
             semantic_violation_threshold=constitution_cfg.semantic_violation_threshold,
             semantic_gray_zone_threshold=constitution_cfg.semantic_gray_zone_threshold,
+            use_semantic=constitution_cfg.use_semantic,
         )
         if constitution_path
         else _default_constitution(
             semantic_violation_threshold=constitution_cfg.semantic_violation_threshold,
             semantic_gray_zone_threshold=constitution_cfg.semantic_gray_zone_threshold,
+            use_semantic=constitution_cfg.use_semantic,
         )
     )
 
