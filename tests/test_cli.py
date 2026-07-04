@@ -680,6 +680,19 @@ def test_cli_wrapper_audit_verify_forwards_args(monkeypatch: pytest.MonkeyPatch)
     assert captured["argv"] == ["--audit-path", "audit/decisions.jsonl", "--json"]
 
 
+def test_cli_wrapper_audit_divergence_forwards_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, list[str]] = {}
+
+    def fake_main(argv):  # noqa: ANN001, ANN202
+        captured["argv"] = list(argv)
+        return 9
+
+    monkeypatch.setattr(cli, "audit_divergence_main", fake_main)
+    exit_code = cli.main(["audit", "divergence", "--audit-path", "audit/decisions.jsonl", "--json"])
+    assert exit_code == 9
+    assert captured["argv"] == ["--audit-path", "audit/decisions.jsonl", "--json"]
+
+
 def test_cli_wrapper_explainability_render_forwards_args(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, list[str]] = {}
 

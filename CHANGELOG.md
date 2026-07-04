@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+
+- `audit_divergence.py` — ethical divergence telemetry over the audit trail. New command `aetherya audit divergence` (also `python -m aetherya.audit_divergence`) aggregates LLM-shadow results: shadow evaluation count, shadow errors, state mismatch rate, mean/max `risk_delta`, parse success rate, flag frequency, and top-N events by absolute risk delta (`--top`, `--min-abs-delta`, `--json`).
+- Pipeline: the audited `llm_shadow` block now includes an `evaluation` sub-block (`parse_success`, `reasoning`, `flags`) when the provider performs a structured ethical evaluation. Dry-run shadow events are unchanged.
+
 ## v0.9.0 - 2026-07-04
 
 ### Added

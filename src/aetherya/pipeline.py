@@ -723,6 +723,18 @@ def run_pipeline(
                     "absolute_risk_delta": abs(risk_delta),
                 },
             }
+            # Structured evaluation details (only providers that perform a real
+            # ethical evaluation set llm_parse_success; dry_run does not).
+            parse_success_raw = response.metadata.get("llm_parse_success")
+            if parse_success_raw is not None:
+                raw_flags = response.metadata.get("llm_flags", [])
+                llm_shadow["evaluation"] = {
+                    "parse_success": bool(parse_success_raw),
+                    "reasoning": str(response.metadata.get("llm_reasoning", "")),
+                    "flags": (
+                        [str(flag) for flag in raw_flags] if isinstance(raw_flags, list) else []
+                    ),
+                }
     except Exception as exc:
         llm_shadow = {
             "enabled": True,

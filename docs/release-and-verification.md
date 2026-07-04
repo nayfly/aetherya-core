@@ -90,6 +90,34 @@ aetherya audit verify -- --audit-path audit/decisions.jsonl --require-hmac --req
 
 ---
 
+## Ethical Divergence Telemetry
+
+Aggregates LLM-shadow evaluation data from the audit trail: how often and how far the
+(non-authoritative) LLM shadow disagrees with the deterministic core. Useful for policy
+calibration — a high mismatch rate on a given actor or action family signals thresholds
+worth reviewing.
+
+```bash
+# Human-readable summary
+python -m aetherya.audit_divergence --audit-path audit/decisions.jsonl
+
+# JSON report, top-10 divergences with |risk_delta| >= 20
+python -m aetherya.audit_divergence \
+  --audit-path audit/decisions.jsonl --top 10 --min-abs-delta 20 --json
+```
+
+Report contents: shadow evaluation count, shadow errors (timeouts/provider failures),
+state mismatch rate, mean/max risk delta, parse success rate, flag frequency, and the
+top-N events by absolute risk delta.
+
+CLI wrapper:
+
+```bash
+aetherya audit divergence -- --audit-path audit/decisions.jsonl --json
+```
+
+---
+
 ## Explainability
 
 Generate Mermaid graph from the latest audit event:

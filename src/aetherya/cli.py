@@ -16,6 +16,7 @@ from aetherya.approval_proof import (
     load_approval_keyring,
 )
 from aetherya.audit import AuditLogger
+from aetherya.audit_divergence import main as audit_divergence_main
 from aetherya.audit_verify import main as audit_verify_main
 from aetherya.chaos_benchmark import main as chaos_benchmark_main
 from aetherya.config import LLMShadowConfig, PolicyConfig, load_policy_config
@@ -468,6 +469,12 @@ def _build_parser() -> argparse.ArgumentParser:
         name="verify",
         help_text="Verify audit integrity and attestation.",
         target_main=audit_verify_main,
+    )
+    _add_forward_command(
+        audit_subparsers,
+        name="divergence",
+        help_text="Aggregate LLM-shadow ethical divergence telemetry.",
+        target_main=audit_divergence_main,
     )
 
     explainability_parser = subparsers.add_parser("explainability", help="Explainability tooling.")

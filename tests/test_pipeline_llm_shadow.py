@@ -305,6 +305,124 @@ def test_pipeline_llm_shadow_timeout_is_swallowed(
     assert llm_shadow["error_type"] == "TimeoutError"
 
 
+def test_pipeline_llm_shadow_evaluation_block_present_when_provider_parses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    policy_path = write_policy(
+        tmp_path,
+        lambda data: data["llm_shadow"].update(
+            {"enabled": True, "provider": "openai", "model": "gpt-4o-mini"}
+        ),
+    )
+    cfg = load_policy_config(policy_path)
+    audit_path = tmp_path / "decisions.jsonl"
+    audit = AuditLogger(audit_path)
+
+    class EvaluatingProvider:
+        def __init__(self, timeout_sec: float):  # noqa: ARG002
+            pass
+
+        def generate(self, request):  # noqa: ANN001
+            return LLMResponse(
+                response_id="openai-eval-1",
+                model=request.model,
+                provider="openai",
+                output_text='{"risk_score": 72, "reasoning": "risky", "flags": ["harmful"]}',
+                finish_reason="stop",
+                usage=LLMUsage(prompt_tokens=10, completion_tokens=8, total_tokens=18),
+                dry_run=False,
+                metadata={
+                    "request_hash": "shadow-openai-eval",
+                    "suggested_state": "deny",
+                    "suggested_risk_score": 72,
+                    "llm_parse_success": True,
+                    "llm_reasoning": "risky",
+                    "llm_flags": ["harmful"],
+                },
+            )
+
+    monkeypatch.setattr(pipeline, "OpenAILLMProvider", EvaluatingProvider)
+
+    decision = run_pipeline(
+        "help user", constitution=make_core(), actor="robert", cfg=cfg, audit=audit
+    )
+    assert decision.allowed is True
+
+    event = read_last_event(audit_path)
+    llm_shadow = event["context"]["llm_shadow"]
+    assert llm_shadow["evaluation"] == {
+        "parse_success": True,
+        "reasoning": "risky",
+        "flags": ["harmful"],
+    }
+    assert llm_shadow["ethical_divergence"]["risk_delta"] == 72 - decision.risk_score
+
+
+def test_pipeline_llm_shadow_evaluation_block_absent_for_dry_run(tmp_path: Path) -> None:
+    policy_path = write_policy(
+        tmp_path,
+        lambda data: data["llm_shadow"].update({"enabled": True, "max_tokens": 32}),
+    )
+    cfg = load_policy_config(policy_path)
+    audit_path = tmp_path / "decisions.jsonl"
+    audit = AuditLogger(audit_path)
+
+    run_pipeline("help user", constitution=make_core(), actor="robert", cfg=cfg, audit=audit)
+
+    event = read_last_event(audit_path)
+    assert "evaluation" not in event["context"]["llm_shadow"]
+
+
+def test_pipeline_llm_shadow_evaluation_flags_not_a_list_yields_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import aetherya.pipeline as pipeline
+
+    policy_path = write_policy(
+        tmp_path,
+        lambda data: data["llm_shadow"].update(
+            {"enabled": True, "provider": "openai", "model": "gpt-4o-mini"}
+        ),
+    )
+    cfg = load_policy_config(policy_path)
+    audit_path = tmp_path / "decisions.jsonl"
+    audit = AuditLogger(audit_path)
+
+    class BadFlagsProvider:
+        def __init__(self, timeout_sec: float):  # noqa: ARG002
+            pass
+
+        def generate(self, request):  # noqa: ANN001
+            return LLMResponse(
+                response_id="openai-badflags-1",
+                model=request.model,
+                provider="openai",
+                output_text="not json",
+                finish_reason="stop",
+                usage=LLMUsage(prompt_tokens=10, completion_tokens=8, total_tokens=18),
+                dry_run=False,
+                metadata={
+                    "request_hash": "shadow-openai-badflags",
+                    "suggested_state": "require_confirm",
+                    "suggested_risk_score": 50,
+                    "llm_parse_success": False,
+                    "llm_flags": "harmful",
+                },
+            )
+
+    monkeypatch.setattr(pipeline, "OpenAILLMProvider", BadFlagsProvider)
+
+    run_pipeline("help user", constitution=make_core(), actor="robert", cfg=cfg, audit=audit)
+
+    event = read_last_event(audit_path)
+    evaluation = event["context"]["llm_shadow"]["evaluation"]
+    assert evaluation["parse_success"] is False
+    assert evaluation["flags"] == []
+    assert evaluation["reasoning"] == ""
+
+
 def test_build_llm_shadow_provider_rejects_unsupported_provider() -> None:
     import aetherya.pipeline as pipeline
     from aetherya.config import LLMShadowConfig
