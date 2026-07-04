@@ -1018,3 +1018,46 @@ def test_map_anthropic_stop_reason_variants() -> None:
     assert llm_provider._map_anthropic_stop_reason("max_tokens") == "length"
     assert llm_provider._map_anthropic_stop_reason("end_turn") == "stop"
     assert llm_provider._map_anthropic_stop_reason(None) == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Shadow helpers — remaining branches
+# ---------------------------------------------------------------------------
+
+
+def test_extract_user_content_skips_trailing_assistant_message() -> None:
+    messages = [
+        LLMMessage(role="user", content="the real intent"),
+        LLMMessage(role="assistant", content="previous answer"),
+    ]
+    assert llm_provider._extract_user_content(messages) == "the real intent"
+
+
+def test_extract_user_content_returns_empty_without_user_message() -> None:
+    messages = [LLMMessage(role="system", content="system only")]
+    assert llm_provider._extract_user_content(messages) == ""
+
+
+def test_build_shadow_eval_context_includes_decision_reason() -> None:
+    request = LLMRequest(
+        model="gpt-4o-mini",
+        messages=[LLMMessage(role="user", content="do something")],
+        max_tokens=16,
+        metadata={"decision_reason": "deny: critical_tag_detected"},
+    )
+    context = llm_provider._build_shadow_eval_context(request)
+    assert "Core decision reason: deny: critical_tag_detected" in context
+
+
+def test_strip_json_fences_without_closing_fence() -> None:
+    text = '```json\n{"risk_score": 1}'
+    assert llm_provider._strip_json_fences(text) == '{"risk_score": 1}'
+
+
+def test_parse_shadow_response_unexpected_error_branch() -> None:
+    score, reasoning, flags, err = llm_provider._parse_shadow_response(None)  # type: ignore[arg-type]
+    assert score == llm_provider._SHADOW_FALLBACK_SCORE
+    assert reasoning == ""
+    assert flags == []
+    assert err is not None
+    assert err.startswith("unexpected_error:")
