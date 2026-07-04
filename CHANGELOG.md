@@ -13,6 +13,11 @@ All notable changes to this project are documented in this file.
 - `AnthropicLLMProvider` — Claude as LLM-shadow evaluator. Set `llm_shadow.provider: anthropic` with a Claude model (e.g. `claude-opus-4-8`); requires `ANTHROPIC_API_KEY` and the `anthropic` extra (`pip install -e ".[anthropic]"`). Same structured ethical evaluation and parse-fallback contract as the OpenAI provider. Sampling parameters are not forwarded (current Claude models reject them); a safety refusal (`stop_reason: refusal`) degrades to the neutral fallback score with `llm_parse_error` recorded. System prompt goes in the Messages API `system` field.
 - `pyproject.toml`: new optional dependency group `anthropic` (`anthropic>=0.40.0`).
 
+### Fixed
+
+- CI: `test_chaos_byte_mutator_detects_chain_break_under_10ms` flaked on fresh runners — the single-shot latency measurement ran cold as the first test of the isolated `chaos_tests` job and exceeded the 10ms SLO (~12ms). The verification path is now warmed up before the timed window, mirroring the existing `semantic_slo` warmup pattern. Steady-state latency percentiles remain enforced by `chaos_benchmark`.
+- CI: on `chaos_tests` failure, the pytest output is now published to the job summary (readable without authentication).
+
 ## v0.9.0 - 2026-07-04
 
 ### Added

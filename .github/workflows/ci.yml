@@ -136,7 +136,18 @@ jobs:
 
       - name: Chaos Targeted Tests
         run: |
-          pytest tests/test_audit_chaos_bytes.py tests/test_pipeline_fail_close.py -q
+          set -o pipefail
+          pytest tests/test_audit_chaos_bytes.py tests/test_pipeline_fail_close.py -q -rA 2>&1 | tee /tmp/chaos_pytest.log
+
+      - name: Publish chaos test output to job summary
+        if: failure()
+        run: |
+          {
+            echo '## Chaos Targeted Tests — pytest output'
+            echo '```'
+            tail -c 60000 /tmp/chaos_pytest.log || echo "no log captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Chaos Benchmark (Latency SLO)
         env:
