@@ -188,6 +188,13 @@ def _map_openai_finish_reason(raw: Any) -> str:
     return LLMFinishReason.STOP.value
 
 
+def _map_anthropic_stop_reason(raw: Any) -> str:
+    cleaned = str(raw).strip().lower() if raw is not None else ""
+    if cleaned == "max_tokens":
+        return LLMFinishReason.LENGTH.value
+    return LLMFinishReason.STOP.value
+
+
 # ---------------------------------------------------------------------------
 # Shadow ethical evaluation — prompt + response parsing
 # ---------------------------------------------------------------------------
@@ -214,8 +221,8 @@ def _extract_user_content(messages: list[LLMMessage]) -> str:
     return ""
 
 
-def _build_shadow_eval_payload(request: LLMRequest) -> list[dict[str, str]]:
-    """Build the messages payload sent to OpenAI for ethical shadow evaluation."""
+def _build_shadow_eval_context(request: LLMRequest) -> str:
+    """Build the user-turn context string for the ethical shadow evaluation."""
     user_content = _extract_user_content(request.messages)
     context_parts: list[str] = [f"Action: {user_content}"]
     meta = request.metadata
@@ -228,9 +235,14 @@ def _build_shadow_eval_payload(request: LLMRequest) -> list[dict[str, str]]:
     core_risk = meta.get("core_risk_score")
     if core_risk is not None:
         context_parts.append(f"Core risk score: {core_risk}")
+    return "\n".join(context_parts)
+
+
+def _build_shadow_eval_payload(request: LLMRequest) -> list[dict[str, str]]:
+    """Build the messages payload sent to OpenAI for ethical shadow evaluation."""
     return [
         {"role": "system", "content": _SHADOW_SYSTEM_PROMPT},
-        {"role": "user", "content": "\n".join(context_parts)},
+        {"role": "user", "content": _build_shadow_eval_context(request)},
     ]
 
 
@@ -462,6 +474,126 @@ class OpenAILLMProvider:
             provider=self.provider_name,
             output_text=output_text,
             finish_reason=_map_openai_finish_reason(finish_reason_raw),
+            usage=usage,
+            dry_run=False,
+            metadata=meta,
+        )
+        response.validate()
+        return response
+
+
+class AnthropicLLMProvider:
+    provider_name = "anthropic"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout_sec: float = 10.0,
+    ) -> None:
+        if timeout_sec <= 0.0:
+            raise ValueError("timeout_sec must be > 0")
+
+        resolved_api_key = (
+            api_key.strip()
+            if isinstance(api_key, str)
+            else os.getenv("ANTHROPIC_API_KEY", "").strip()
+        )
+        if not resolved_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required for AnthropicLLMProvider")
+
+        try:
+            anthropic_module = importlib.import_module("anthropic")
+        except ImportError as exc:
+            raise RuntimeError("anthropic package is not installed") from exc
+        anthropic_client_cls = getattr(anthropic_module, "Anthropic", None)
+        if not callable(anthropic_client_cls):
+            raise RuntimeError("anthropic package is not installed")
+
+        client_kwargs: dict[str, Any] = {
+            "api_key": resolved_api_key,
+            "timeout": float(timeout_sec),
+            "max_retries": 0,
+        }
+        if isinstance(base_url, str) and base_url.strip():
+            client_kwargs["base_url"] = base_url.strip()
+
+        self._client = anthropic_client_cls(**client_kwargs)
+        self._seed = "aetherya:anthropic:v1"
+
+    def generate(self, request: LLMRequest) -> LLMResponse:
+        request.validate()
+
+        req_hash = _request_hash(self._seed, request)
+        # Sampling parameters (temperature/top_p/top_k) are intentionally not
+        # forwarded: current Claude models (Opus 4.7+, Sonnet 5) reject them.
+        message = self._client.messages.create(
+            model=request.model.strip(),
+            max_tokens=int(request.max_tokens),
+            system=_SHADOW_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": _build_shadow_eval_context(request)}],
+        )
+
+        text_parts: list[str] = []
+        for block in list(getattr(message, "content", []) or []):
+            block_text = getattr(block, "text", None)
+            if getattr(block, "type", "") == "text" and isinstance(block_text, str):
+                text_parts.append(block_text)
+        output_text = "".join(text_parts)
+
+        stop_reason_raw = getattr(message, "stop_reason", None)
+
+        usage_raw = getattr(message, "usage", None)
+        prompt_tokens = max(0, _coerce_int(getattr(usage_raw, "input_tokens", 0), 0))
+        completion_tokens = max(0, _coerce_int(getattr(usage_raw, "output_tokens", 0), 0))
+        usage = LLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+
+        # Parse structured JSON from the shadow response; fall back to neutral 50 on any failure.
+        # A safety refusal (stop_reason == "refusal") yields empty content, so it lands
+        # on the same fallback path with llm_parse_error recorded.
+        suggested_risk_score, llm_reasoning, llm_flags, parse_error = _parse_shadow_response(
+            output_text
+        )
+        if parse_error is not None:
+            _log.debug("llm_shadow parse fallback (score=50): %s", parse_error)
+        suggested_state = _state_from_risk_score(suggested_risk_score)
+
+        response_id_raw = getattr(message, "id", "")
+        response_id = (
+            response_id_raw.strip()
+            if isinstance(response_id_raw, str) and response_id_raw.strip()
+            else f"anthropic:{req_hash[:24]}"
+        )
+        model_raw = getattr(message, "model", request.model.strip())
+        model = (
+            model_raw.strip() if isinstance(model_raw, str) and model_raw.strip() else request.model
+        )
+
+        meta: dict[str, Any] = {
+            "request_hash": req_hash,
+            "raw_finish_reason": (
+                stop_reason_raw if isinstance(stop_reason_raw, str) else str(stop_reason_raw)
+            ),
+            "suggested_state": suggested_state,
+            "suggested_risk_score": suggested_risk_score,
+            "llm_parse_success": parse_error is None,
+            "llm_reasoning": llm_reasoning,
+            "llm_flags": llm_flags,
+        }
+        if parse_error is not None:
+            meta["llm_parse_error"] = parse_error
+
+        response = LLMResponse(
+            response_id=response_id,
+            model=model,
+            provider=self.provider_name,
+            output_text=output_text,
+            finish_reason=_map_anthropic_stop_reason(stop_reason_raw),
             usage=usage,
             dry_run=False,
             metadata=meta,

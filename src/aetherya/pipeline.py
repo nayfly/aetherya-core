@@ -23,7 +23,13 @@ from aetherya.constitution import Constitution
 from aetherya.execution_gate import ExecutionGate
 from aetherya.explainability import ExplainabilityEngine
 from aetherya.jailbreak import JailbreakGuard
-from aetherya.llm_provider import DryRunLLMProvider, LLMMessage, LLMRequest, OpenAILLMProvider
+from aetherya.llm_provider import (
+    AnthropicLLMProvider,
+    DryRunLLMProvider,
+    LLMMessage,
+    LLMRequest,
+    OpenAILLMProvider,
+)
 from aetherya.modes import Mode
 from aetherya.output_gate import OutputGate
 from aetherya.parser import parse_user_input
@@ -147,6 +153,8 @@ def _build_llm_shadow_provider(shadow_cfg: LLMShadowConfig) -> Any:
         return DryRunLLMProvider(seed="aetherya-shadow:v1")
     if provider == "openai":
         return OpenAILLMProvider(timeout_sec=shadow_cfg.timeout_sec)
+    if provider == "anthropic":
+        return AnthropicLLMProvider(timeout_sec=shadow_cfg.timeout_sec)
     raise ValueError(f"unsupported llm_shadow.provider: {shadow_cfg.provider}")
 
 

@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file.
 - Pipeline: the audited `llm_shadow` block now includes an `evaluation` sub-block (`parse_success`, `reasoning`, `flags`) when the provider performs a structured ethical evaluation. Dry-run shadow events are unchanged.
 - `aetherya warmup` — preloads the semantic constitution model (`all-MiniLM-L6-v2` by default, `--model-name` to override) into the process cache and runs one dummy encode. Intended for deployment startup: with `use_semantic` enabled by default, the first ambiguous input would otherwise trigger the model download/load inside the decision path. Exposed as `warmup_semantic_model()` in `constitution.py`.
 - `constitution.py`: `DEFAULT_SEMANTIC_MODEL` constant (`all-MiniLM-L6-v2`) replaces the inline model-name literal.
+- `AnthropicLLMProvider` — Claude as LLM-shadow evaluator. Set `llm_shadow.provider: anthropic` with a Claude model (e.g. `claude-opus-4-8`); requires `ANTHROPIC_API_KEY` and the `anthropic` extra (`pip install -e ".[anthropic]"`). Same structured ethical evaluation and parse-fallback contract as the OpenAI provider. Sampling parameters are not forwarded (current Claude models reject them); a safety refusal (`stop_reason: refusal`) degrades to the neutral fallback score with `llm_parse_error` recorded. System prompt goes in the Messages API `system` field.
+- `pyproject.toml`: new optional dependency group `anthropic` (`anthropic>=0.40.0`).
 
 ## v0.9.0 - 2026-07-04
 

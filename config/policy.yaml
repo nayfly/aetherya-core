@@ -115,6 +115,12 @@ confirmation:
       replay_redis_url_env: AETHERYA_CONFIRMATION_REPLAY_REDIS_URL
       replay_redis_prefix: aetherya:appr
 
+# LLM shadow — non-authoritative ethical evaluation, never affects the decision.
+# provider: dry_run | openai | anthropic
+#   openai    requires OPENAI_API_KEY    (e.g. model: gpt-4o-mini)
+#   anthropic requires ANTHROPIC_API_KEY (e.g. model: claude-opus-4-8) and
+#             `pip install -e ".[anthropic]"`. Note: temperature is ignored by
+#             the anthropic provider (current Claude models reject sampling params).
 llm_shadow:
   enabled: false
   provider: dry_run

@@ -440,6 +440,31 @@ def test_build_llm_shadow_provider_rejects_unsupported_provider() -> None:
         pipeline._build_llm_shadow_provider(bad_cfg)  # noqa: SLF001
 
 
+def test_build_llm_shadow_provider_builds_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aetherya.pipeline as pipeline
+    from aetherya.config import LLMShadowConfig
+
+    built: dict[str, float] = {}
+
+    class StubAnthropicProvider:
+        def __init__(self, timeout_sec: float):
+            built["timeout_sec"] = timeout_sec
+
+    monkeypatch.setattr(pipeline, "AnthropicLLMProvider", StubAnthropicProvider)
+
+    cfg = LLMShadowConfig(
+        enabled=True,
+        provider="anthropic",
+        model="claude-opus-4-8",
+        temperature=0.0,
+        max_tokens=32,
+        timeout_sec=2.5,
+    )
+    provider = pipeline._build_llm_shadow_provider(cfg)  # noqa: SLF001
+    assert isinstance(provider, StubAnthropicProvider)
+    assert built["timeout_sec"] == 2.5
+
+
 def test_call_with_timeout_zero_or_negative_runs_inline() -> None:
     import aetherya.pipeline as pipeline
 

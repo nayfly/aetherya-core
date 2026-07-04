@@ -757,7 +757,7 @@ def test_llm_shadow_invalid_provider_raises(tmp_path):
         "procedural_guard": {"critical_tags": [], "privileged_ops": []},
         "llm_shadow": {
             "enabled": True,
-            "provider": "anthropic",
+            "provider": "gemini",
             "model": "gpt-shadow",
             "temperature": 0.2,
             "max_tokens": 64,
@@ -770,6 +770,35 @@ def test_llm_shadow_invalid_provider_raises(tmp_path):
 
     with pytest.raises(ValueError, match="llm_shadow.provider"):
         load_policy_config(path)
+
+
+def test_llm_shadow_anthropic_provider_is_valid(tmp_path):
+    cfg_data = {
+        "version": 1,
+        "modes": {
+            "consultive": {
+                "default_state": "log_only",
+                "thresholds": {"deny_at": 90, "confirm_at": 60, "log_only_at": 0},
+            }
+        },
+        "aggregator": {"weights": {}, "hard_deny_if": []},
+        "procedural_guard": {"critical_tags": [], "privileged_ops": []},
+        "llm_shadow": {
+            "enabled": True,
+            "provider": "anthropic",
+            "model": "claude-opus-4-8",
+            "temperature": 0.0,
+            "max_tokens": 64,
+            "timeout_sec": 5.0,
+        },
+    }
+
+    path = tmp_path / "policy_shadow_anthropic.yaml"
+    path.write_text(yaml.dump(cfg_data))
+
+    cfg = load_policy_config(path)
+    assert cfg.llm_shadow.provider == "anthropic"
+    assert cfg.llm_shadow.model == "claude-opus-4-8"
 
 
 def test_llm_shadow_invalid_timeout_raises(tmp_path):

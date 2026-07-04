@@ -8,6 +8,7 @@ import pytest
 
 import aetherya.llm_provider as llm_provider
 from aetherya.llm_provider import (
+    AnthropicLLMProvider,
     DryRunLLMProvider,
     LLMMessage,
     LLMRequest,
@@ -793,3 +794,227 @@ def test_openai_provider_shadow_messages_include_system_prompt(
     assert messages[1]["role"] == "user"
     assert "run rm -rf /tmp" in messages[1]["content"]
     assert "Core risk score: 95" in messages[1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# AnthropicLLMProvider
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_anthropic(monkeypatch: pytest.MonkeyPatch, message_factory):  # noqa: ANN202
+    class FakeMessages:
+        def __init__(self) -> None:
+            self.last_kwargs: dict[str, object] = {}
+
+        def create(self, **kwargs):  # noqa: ANN003,ANN202
+            self.last_kwargs = dict(kwargs)
+            return message_factory()
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = dict(kwargs)
+            self.messages = FakeMessages()
+
+    fake_module = types.ModuleType("anthropic")
+    fake_module.Anthropic = FakeAnthropic  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "anthropic", fake_module)
+    return FakeAnthropic
+
+
+def _fake_text_block(text: str):  # noqa: ANN202
+    class FakeTextBlock:
+        type = "text"
+
+    block = FakeTextBlock()
+    block.text = text  # type: ignore[attr-defined]
+    return block
+
+
+def test_anthropic_provider_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+        AnthropicLLMProvider()
+
+
+def test_anthropic_provider_rejects_non_positive_timeout() -> None:
+    with pytest.raises(ValueError, match="timeout_sec must be > 0"):
+        AnthropicLLMProvider(api_key="sk-ant-test", timeout_sec=0.0)
+
+
+def test_anthropic_provider_import_error_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(name: str):  # noqa: ANN202
+        raise ImportError(name)
+
+    monkeypatch.setattr(llm_provider.importlib, "import_module", _boom)
+    with pytest.raises(RuntimeError, match="anthropic package is not installed"):
+        AnthropicLLMProvider(api_key="sk-ant-test")
+
+
+def test_anthropic_provider_raises_when_sdk_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_module = types.ModuleType("anthropic")
+    monkeypatch.setitem(sys.modules, "anthropic", fake_module)
+    with pytest.raises(RuntimeError, match="anthropic package is not installed"):
+        AnthropicLLMProvider(api_key="sk-ant-test")
+
+
+def test_anthropic_provider_generate_parses_json_and_maps_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeUsage:
+        input_tokens = 9
+        output_tokens = 6
+
+    class FakeMessage:
+        id = "msg_test123"
+        model = "claude-opus-4-8"
+        stop_reason = "end_turn"
+        usage = FakeUsage()
+        content = [
+            _fake_text_block('{"risk_score": 72, "reasoning": "risky", "flags": ["harmful"]}')
+        ]
+
+    _install_fake_anthropic(monkeypatch, FakeMessage)
+
+    provider = AnthropicLLMProvider(api_key="sk-ant-test", timeout_sec=4.0)
+    request = LLMRequest(
+        model="claude-opus-4-8",
+        messages=[
+            LLMMessage(role="system", content="shadow mode"),
+            LLMMessage(role="user", content="delete all backups"),
+        ],
+        temperature=0.3,
+        max_tokens=48,
+        metadata={"mode": "operative", "core_risk_score": 90},
+    )
+
+    response = provider.generate(request)
+    assert response.provider == "anthropic"
+    assert response.dry_run is False
+    assert response.finish_reason == "stop"
+    assert response.response_id == "msg_test123"
+    assert response.usage.prompt_tokens == 9
+    assert response.usage.completion_tokens == 6
+    assert response.usage.total_tokens == 15
+    assert response.metadata["suggested_risk_score"] == 72
+    assert response.metadata["suggested_state"] == "require_confirm"
+    assert response.metadata["llm_parse_success"] is True
+    assert response.metadata["llm_reasoning"] == "risky"
+    assert response.metadata["llm_flags"] == ["harmful"]
+
+    client = provider._client  # noqa: SLF001
+    assert client.kwargs["timeout"] == 4.0
+    assert client.kwargs["max_retries"] == 0
+    kwargs = client.messages.last_kwargs
+    assert kwargs["model"] == "claude-opus-4-8"
+    assert kwargs["max_tokens"] == 48
+    assert "temperature" not in kwargs  # current Claude models reject sampling params
+    assert "risk_score" in kwargs["system"]
+    assert kwargs["messages"][0]["role"] == "user"
+    assert "delete all backups" in kwargs["messages"][0]["content"]
+    assert "Core risk score: 90" in kwargs["messages"][0]["content"]
+
+
+def test_anthropic_provider_maps_max_tokens_stop_reason_to_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeUsage:
+        input_tokens = 5
+        output_tokens = 48
+
+    class FakeMessage:
+        id = "msg_len"
+        model = "claude-opus-4-8"
+        stop_reason = "max_tokens"
+        usage = FakeUsage()
+        content = [_fake_text_block('{"risk_score": 10')]
+
+    _install_fake_anthropic(monkeypatch, FakeMessage)
+
+    provider = AnthropicLLMProvider(api_key="sk-ant-test")
+    response = provider.generate(
+        LLMRequest(
+            model="claude-opus-4-8",
+            messages=[LLMMessage(role="user", content="hello")],
+            max_tokens=48,
+        )
+    )
+    assert response.finish_reason == "length"
+    assert response.metadata["llm_parse_success"] is False
+    assert response.metadata["suggested_risk_score"] == llm_provider._SHADOW_FALLBACK_SCORE
+
+
+def test_anthropic_provider_refusal_empty_content_falls_back_to_50(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeUsage:
+        input_tokens = 5
+        output_tokens = 0
+
+    class FakeMessage:
+        id = "msg_refusal"
+        model = "claude-opus-4-8"
+        stop_reason = "refusal"
+        usage = FakeUsage()
+        content: list = []
+
+    _install_fake_anthropic(monkeypatch, FakeMessage)
+
+    provider = AnthropicLLMProvider(api_key="sk-ant-test")
+    response = provider.generate(
+        LLMRequest(
+            model="claude-opus-4-8",
+            messages=[LLMMessage(role="user", content="hello")],
+            max_tokens=48,
+        )
+    )
+    assert response.output_text == ""
+    assert response.finish_reason == "stop"
+    assert response.metadata["raw_finish_reason"] == "refusal"
+    assert response.metadata["llm_parse_success"] is False
+    assert response.metadata["suggested_risk_score"] == llm_provider._SHADOW_FALLBACK_SCORE
+    assert "llm_parse_error" in response.metadata
+
+
+def test_anthropic_provider_skips_non_text_blocks_and_handles_fallback_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeThinkingBlock:
+        type = "thinking"
+        text = 42  # non-str text must also be skipped
+
+    class FakeUsage:
+        input_tokens = "bad"
+        output_tokens = None
+
+    class FakeMessage:
+        id = "   "
+        model = ""
+        stop_reason = None
+        usage = FakeUsage()
+        content = [FakeThinkingBlock(), _fake_text_block('{"risk_score": 5}')]
+
+    _install_fake_anthropic(monkeypatch, FakeMessage)
+
+    provider = AnthropicLLMProvider(api_key="sk-ant-test", base_url="https://proxy.local")
+    response = provider.generate(
+        LLMRequest(
+            model="claude-opus-4-8",
+            messages=[LLMMessage(role="user", content="hello")],
+            max_tokens=16,
+        )
+    )
+    assert response.response_id.startswith("anthropic:")
+    assert response.model == "claude-opus-4-8"
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.completion_tokens == 0
+    assert response.metadata["suggested_risk_score"] == 5
+    assert response.metadata["raw_finish_reason"] == "None"
+
+    client = provider._client  # noqa: SLF001
+    assert client.kwargs["base_url"] == "https://proxy.local"
+
+
+def test_map_anthropic_stop_reason_variants() -> None:
+    assert llm_provider._map_anthropic_stop_reason("max_tokens") == "length"
+    assert llm_provider._map_anthropic_stop_reason("end_turn") == "stop"
+    assert llm_provider._map_anthropic_stop_reason(None) == "stop"

@@ -389,8 +389,8 @@ def _load_llm_shadow(raw: dict[str, Any] | None) -> LLMShadowConfig:
     data = raw or {}
 
     provider = str(data.get("provider", "dry_run")).strip().lower()
-    if provider not in {"dry_run", "openai"}:
-        raise ValueError("llm_shadow.provider must be one of: dry_run, openai")
+    if provider not in {"dry_run", "openai", "anthropic"}:
+        raise ValueError("llm_shadow.provider must be one of: dry_run, openai, anthropic")
 
     model = str(data.get("model", "gpt-dry")).strip()
     if not model:
