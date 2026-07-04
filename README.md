@@ -3,7 +3,7 @@
 ![CI](https://github.com/nayfly/aetherya-core/actions/workflows/ci.yml/badge.svg)
 ![Coverage](https://img.shields.io/badge/coverage-99%25-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
-![Version](https://img.shields.io/badge/version-0.8.0-informational)
+![Version](https://img.shields.io/badge/version-0.9.0-informational)
 
 A deterministic, risk-aware policy engine that sits between an LLM and any sensitive action.
 
@@ -137,4 +137,4 @@ python -m aetherya.audit_verify --audit-path "$AUDIT" --require-chain --json \
 
 ---
 
-`v0.8.0` — See [CHANGELOG.md](./CHANGELOG.md) for release details.
+`v0.9.0` — See [CHANGELOG.md](./CHANGELOG.md) for release details.

@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## v0.9.0 - 2026-07-04
+
 ### Added
 
 - `Constitution`: semantic evaluation layer is now enabled by default (`use_semantic=True`). Configurable via new `constitution.use_semantic` flag in `policy.yaml` (set to `false` to run FastKeywordEvaluator only).
