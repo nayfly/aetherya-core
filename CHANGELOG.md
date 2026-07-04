@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file.
 
 - `audit_divergence.py` — ethical divergence telemetry over the audit trail. New command `aetherya audit divergence` (also `python -m aetherya.audit_divergence`) aggregates LLM-shadow results: shadow evaluation count, shadow errors, state mismatch rate, mean/max `risk_delta`, parse success rate, flag frequency, and top-N events by absolute risk delta (`--top`, `--min-abs-delta`, `--json`).
 - Pipeline: the audited `llm_shadow` block now includes an `evaluation` sub-block (`parse_success`, `reasoning`, `flags`) when the provider performs a structured ethical evaluation. Dry-run shadow events are unchanged.
+- `aetherya warmup` — preloads the semantic constitution model (`all-MiniLM-L6-v2` by default, `--model-name` to override) into the process cache and runs one dummy encode. Intended for deployment startup: with `use_semantic` enabled by default, the first ambiguous input would otherwise trigger the model download/load inside the decision path. Exposed as `warmup_semantic_model()` in `constitution.py`.
+- `constitution.py`: `DEFAULT_SEMANTIC_MODEL` constant (`all-MiniLM-L6-v2`) replaces the inline model-name literal.
 
 ## v0.9.0 - 2026-07-04
 

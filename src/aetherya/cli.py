@@ -20,7 +20,12 @@ from aetherya.audit_divergence import main as audit_divergence_main
 from aetherya.audit_verify import main as audit_verify_main
 from aetherya.chaos_benchmark import main as chaos_benchmark_main
 from aetherya.config import LLMShadowConfig, PolicyConfig, load_policy_config
-from aetherya.constitution import Constitution, Principle
+from aetherya.constitution import (
+    DEFAULT_SEMANTIC_MODEL,
+    Constitution,
+    Principle,
+    warmup_semantic_model,
+)
 from aetherya.explainability_render import main as explainability_render_main
 from aetherya.explainability_report import main as explainability_report_main
 from aetherya.parser import parse_user_input
@@ -349,6 +354,22 @@ def _cmd_confirmation_sign(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_warmup(args: argparse.Namespace) -> int:
+    result = warmup_semantic_model(model_name=str(args.model_name))
+    payload = {"ok": True, **result}
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(
+            "warmup ok model={model} already_cached={cached} elapsed_ms={elapsed}".format(
+                model=payload["model_name"],
+                cached=payload["already_cached"],
+                elapsed=payload["elapsed_ms"],
+            )
+        )
+    return 0
+
+
 def _cmd_forward(args: argparse.Namespace) -> int:
     target_main = getattr(args, "target_main", None)
     forward_args = list(getattr(args, "forward_args", []))
@@ -418,6 +439,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     decide_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     decide_parser.set_defaults(handler=_cmd_decide)
+
+    warmup_parser = subparsers.add_parser(
+        "warmup",
+        help="Preload the semantic constitution model to avoid first-request latency.",
+    )
+    warmup_parser.add_argument(
+        "--model-name",
+        default=DEFAULT_SEMANTIC_MODEL,
+        help=f"Sentence-transformers model to preload (default: {DEFAULT_SEMANTIC_MODEL}).",
+    )
+    warmup_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    warmup_parser.set_defaults(handler=_cmd_warmup)
 
     confirmation_parser = subparsers.add_parser("confirmation", help="Strong confirmation tooling.")
     confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command")

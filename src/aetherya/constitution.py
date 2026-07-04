@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -61,6 +62,8 @@ def _to_pipeline_result(evaluator_result: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+DEFAULT_SEMANTIC_MODEL = "all-MiniLM-L6-v2"
+
 _MODEL_CACHE: dict[str, Any] = {}
 
 
@@ -70,6 +73,29 @@ def _default_model_factory(model_name: str) -> Any:
 
         _MODEL_CACHE[model_name] = SentenceTransformer(model_name)
     return _MODEL_CACHE[model_name]
+
+
+def warmup_semantic_model(
+    model_name: str = DEFAULT_SEMANTIC_MODEL,
+    model_factory: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Preload the semantic model into the process cache and run one dummy encode.
+
+    Intended for deployment startup: with use_semantic enabled (the default),
+    the first ambiguous input would otherwise trigger the model download/load
+    inside the decision path.
+    """
+    already_cached = model_name in _MODEL_CACHE
+    start = time.perf_counter()
+    model = (model_factory or _default_model_factory)(model_name)
+    model.encode(["aetherya warmup"])
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    return {
+        "model_name": model_name,
+        "already_cached": already_cached,
+        "elapsed_ms": round(elapsed_ms, 2),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +189,7 @@ class SemanticEvaluator:
     def __init__(
         self,
         principles: list[Principle],
-        model_name: str = "all-MiniLM-L6-v2",
+        model_name: str = DEFAULT_SEMANTIC_MODEL,
         model_factory: Callable[[str], Any] | None = None,
         violation_threshold: float = 0.55,
         gray_zone_threshold: float = 0.35,

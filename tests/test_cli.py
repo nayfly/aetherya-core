@@ -680,6 +680,47 @@ def test_cli_wrapper_audit_verify_forwards_args(monkeypatch: pytest.MonkeyPatch)
     assert captured["argv"] == ["--audit-path", "audit/decisions.jsonl", "--json"]
 
 
+def test_cli_warmup_json_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "warmup_semantic_model",
+        lambda model_name: {
+            "model_name": model_name,
+            "already_cached": False,
+            "elapsed_ms": 12.5,
+        },
+    )
+    exit_code = cli.main(["warmup", "--model-name", "test-model", "--json"])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "ok": True,
+        "model_name": "test-model",
+        "already_cached": False,
+        "elapsed_ms": 12.5,
+    }
+
+
+def test_cli_warmup_text_output_uses_default_model(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "warmup_semantic_model",
+        lambda model_name: {
+            "model_name": model_name,
+            "already_cached": True,
+            "elapsed_ms": 1.0,
+        },
+    )
+    exit_code = cli.main(["warmup"])
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "warmup ok model=all-MiniLM-L6-v2 already_cached=True elapsed_ms=1.0" in out
+
+
 def test_cli_wrapper_audit_divergence_forwards_args(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, list[str]] = {}
 

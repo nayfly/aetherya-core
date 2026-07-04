@@ -16,6 +16,7 @@ from aetherya.constitution import (
     _cosine_sim,
     _default_model_factory,
     _has_negation_before,
+    warmup_semantic_model,
 )
 
 # ---------------------------------------------------------------------------
@@ -572,3 +573,37 @@ def test_semantic_innocent_input_is_allowed() -> None:
     )
     result = core.evaluate(_action("help me write a recipe for chocolate cake"))
     assert result["allowed"] is True
+
+
+# ---------------------------------------------------------------------------
+# warmup_semantic_model
+# ---------------------------------------------------------------------------
+
+
+def test_warmup_semantic_model_loads_and_encodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aetherya.constitution as c_mod
+
+    monkeypatch.setattr(c_mod, "_MODEL_CACHE", {})
+    mock_model = MagicMock()
+    calls = {"n": 0}
+
+    def factory(name: str) -> Any:
+        calls["n"] += 1
+        return mock_model
+
+    result = warmup_semantic_model(model_name="warmup-model", model_factory=factory)
+    assert result["model_name"] == "warmup-model"
+    assert result["already_cached"] is False
+    assert result["elapsed_ms"] >= 0
+    assert calls["n"] == 1
+    mock_model.encode.assert_called_once_with(["aetherya warmup"])
+
+
+def test_warmup_semantic_model_reports_already_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    import aetherya.constitution as c_mod
+
+    mock_model = MagicMock()
+    monkeypatch.setattr(c_mod, "_MODEL_CACHE", {"cached-model": mock_model})
+    result = warmup_semantic_model(model_name="cached-model")
+    assert result["already_cached"] is True
+    mock_model.encode.assert_called_once()
