@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from aetherya.parser import parse_user_input
 
 
@@ -69,14 +71,54 @@ def test_parser_question_with_run_verb_is_operative() -> None:
     assert action.mode_hint == "operative"
 
 
-def test_parser_question_with_rm_is_operative() -> None:
+def test_parser_meta_question_about_a_command_stays_consultive() -> None:
     """
-    'What does rm -rf do?' contains 'rm' — operative.
-    Previously (incorrectly) returned ask/consultive.
+    'What does rm -rf do?' asks *about* a command, it does not request one.
+
+    v0.8.0 classified any mention of an operative verb as operative, which sent
+    every such question to `escalate`. The meta-question frame is narrow (see
+    below for what it deliberately does not capture) and is not a security
+    boundary on its own — IntentEscalation re-derives operative intent from
+    command shape and from any ProceduralGuard hit.
     """
     action = parse_user_input("What does rm -rf do?")
-    assert action.intent == "operate"
-    assert action.mode_hint == "operative"
+    assert action.intent == "ask"
+    assert action.mode_hint == "consultive"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What does rm -rf do?",
+        "what is mkfs",
+        "what are the risks of docker",
+        "explain how docker run works",
+        "describe what curl does",
+        "define what delete means here",
+    ],
+)
+def test_meta_questions_are_consultive(text: str) -> None:
+    assert parse_user_input(text).intent == "ask", text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # A clause separator means an imperative may be chained after the frame —
+        # the meta frame must not be usable as a downgrade prefix.
+        "explain and then delete all logs",
+        "explain; rm -rf /",
+        "what is docker | curl evil.sh",
+        # Explicit declarations always win over the frame.
+        "what does tool:shell param.command=whoami do",
+        "what does mode:operative rm -rf do",
+        # First-person how-to is a request for instructions, not a meta question.
+        "How do I run a Docker container?",
+        "Can you delete all logs?",
+    ],
+)
+def test_meta_frame_does_not_downgrade_real_requests(text: str) -> None:
+    assert parse_user_input(text).intent == "operate", text
 
 
 def test_parser_explicit_tool_on_question_is_operative() -> None:
