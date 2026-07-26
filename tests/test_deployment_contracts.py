@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +27,11 @@ _POLICY = "config/policy.yaml"
 
 
 def test_matching_pin_loads_normally(monkeypatch: pytest.MonkeyPatch) -> None:
-    fingerprint = load_policy_config(_POLICY).policy_fingerprint
+    """The pin is the *effective* fingerprint — behaviour, not file bytes."""
+    fingerprint = load_policy_config(_POLICY).effective_fingerprint
     assert fingerprint is not None
     monkeypatch.setenv(POLICY_FINGERPRINT_ENV, fingerprint)
-    assert load_policy_config(_POLICY).policy_fingerprint == fingerprint
+    assert load_policy_config(_POLICY).effective_fingerprint == fingerprint
 
 
 def test_mismatched_pin_refuses_to_load(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,7 +49,7 @@ def test_mismatched_pin_refuses_to_load(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_explicit_pin_overrides_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    fingerprint = load_policy_config(_POLICY).policy_fingerprint
+    fingerprint = load_policy_config(_POLICY).effective_fingerprint
     assert fingerprint is not None
     monkeypatch.setenv(POLICY_FINGERPRINT_ENV, "sha256:ignored")
     assert load_policy_config(_POLICY, expected_fingerprint=fingerprint) is not None
@@ -96,7 +98,7 @@ def _api(tmp_path: Path) -> AetheryaAPI:
 
 
 def test_health_reports_the_policy_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fingerprint = load_policy_config(_POLICY).policy_fingerprint
+    fingerprint = load_policy_config(_POLICY).effective_fingerprint
     monkeypatch.setenv(POLICY_FINGERPRINT_ENV, str(fingerprint))
 
     code, body = _api(tmp_path).health()
@@ -383,3 +385,120 @@ def test_strict_mode_fails_startup_when_warmup_fails(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(server_module, "warmup_semantic_model", _boom)
     with pytest.raises(RuntimeError, match="semantic layer requested but unavailable"):
         server_module.warmup_semantic_layer(policy_path=Path(_POLICY), require_semantic_ready=True)
+
+
+# ---------------------------------------------------------------------------
+# Effective fingerprint: behavioural identity, not file bytes
+# ---------------------------------------------------------------------------
+
+
+def test_cosmetic_edits_do_not_change_the_effective_fingerprint(tmp_path: Path) -> None:
+    """
+    Comments, key order and whitespace change the file hash but not behaviour.
+    Pinning on file bytes would reject a reformatted but identical policy.
+    """
+    base = load_policy_config(_POLICY)
+    data = yaml.safe_load(Path(_POLICY).read_text(encoding="utf-8"))
+
+    path = tmp_path / "reformatted.yaml"
+    path.write_text(
+        "# a completely different header comment\n" + yaml.safe_dump(data, sort_keys=True),
+        encoding="utf-8",
+    )
+    reformatted = load_policy_config(path)
+
+    assert reformatted.policy_fingerprint != base.policy_fingerprint
+    assert reformatted.effective_fingerprint == base.effective_fingerprint
+
+
+def test_a_behavioural_change_does_change_the_effective_fingerprint(tmp_path: Path) -> None:
+    base = load_policy_config(_POLICY)
+    data = yaml.safe_load(Path(_POLICY).read_text(encoding="utf-8"))
+    data["modes"]["operative"]["thresholds"]["deny_at"] = 70
+
+    path = tmp_path / "behaviour.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    assert load_policy_config(path).effective_fingerprint != base.effective_fingerprint
+
+
+def test_a_changed_code_default_changes_the_effective_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The case a file hash cannot see: the YAML omits a section and relies on a
+    default, a code upgrade changes that default, and the engine now decides
+    differently while the file is untouched. That is exactly the silent
+    divergence pinning exists to catch.
+    """
+    import aetherya.config as config_module
+
+    data = yaml.safe_load(Path(_POLICY).read_text(encoding="utf-8"))
+    data.pop("intent_escalation", None)
+    path = tmp_path / "minimal.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    before = load_policy_config(path)
+    monkeypatch.setattr(
+        config_module,
+        "_load_intent_escalation",
+        lambda _raw: config_module.IntentEscalationConfig(enabled=False),
+    )
+    after = load_policy_config(path)
+
+    assert after.policy_fingerprint == before.policy_fingerprint
+    assert after.effective_fingerprint != before.effective_fingerprint
+
+
+def test_the_pin_is_checked_against_the_effective_fingerprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = load_policy_config(_POLICY)
+    monkeypatch.setenv(POLICY_FINGERPRINT_ENV, str(cfg.effective_fingerprint))
+    assert load_policy_config(_POLICY) is not None
+
+    # The file hash is not what the pin compares against.
+    monkeypatch.setenv(POLICY_FINGERPRINT_ENV, str(cfg.policy_fingerprint))
+    with pytest.raises(PolicyFingerprintMismatch):
+        load_policy_config(_POLICY)
+
+
+def test_the_fingerprint_fields_are_excluded_from_their_own_material() -> None:
+    """Otherwise the hash would depend on itself and never stabilise."""
+    from aetherya.config import compute_effective_fingerprint
+
+    cfg = load_policy_config(_POLICY)
+    assert compute_effective_fingerprint(cfg) == cfg.effective_fingerprint
+
+    stripped = replace(cfg, policy_fingerprint=None, effective_fingerprint=None)
+    assert compute_effective_fingerprint(stripped) == cfg.effective_fingerprint
+
+
+def test_health_reports_both_fingerprints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(POLICY_FINGERPRINT_ENV, raising=False)
+    cfg = load_policy_config(_POLICY)
+    _, body = _api(tmp_path).health()
+
+    assert body["policy_fingerprint"] == cfg.policy_fingerprint
+    assert body["effective_fingerprint"] == cfg.effective_fingerprint
+
+
+def test_cli_prints_both_fingerprints(capsys: pytest.CaptureFixture[str]) -> None:
+    """Deployment pipelines need a command that emits the value to pin."""
+    from aetherya.cli import main
+
+    assert main(["policy", "fingerprint", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    cfg = load_policy_config(_POLICY)
+
+    assert payload["effective_fingerprint"] == cfg.effective_fingerprint
+    assert payload["policy_fingerprint"] == cfg.policy_fingerprint
+
+
+def test_cli_fingerprint_text_output(capsys: pytest.CaptureFixture[str]) -> None:
+    from aetherya.cli import main
+
+    assert main(["policy", "fingerprint"]) == 0
+    out = capsys.readouterr().out
+    assert "effective_fingerprint" in out
+    assert "policy_fingerprint" in out

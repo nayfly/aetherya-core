@@ -383,6 +383,29 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_policy_fingerprint(args: argparse.Namespace) -> int:
+    """
+    Print the fingerprints of a policy file.
+
+    Deployment pipelines pin `effective_fingerprint` — it is the behavioural
+    identity, so it survives cosmetic edits to the YAML and, unlike a hash of
+    the file bytes, it changes when a code upgrade alters a default.
+    """
+    cfg = load_policy_config(Path(str(args.policy_path)))
+    payload = {
+        "ok": True,
+        "policy_path": str(args.policy_path),
+        "policy_fingerprint": cfg.policy_fingerprint,
+        "effective_fingerprint": cfg.effective_fingerprint,
+    }
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"policy_fingerprint    {payload['policy_fingerprint']}")
+        print(f"effective_fingerprint {payload['effective_fingerprint']}")
+    return 0
+
+
 def _cmd_forward(args: argparse.Namespace) -> int:
     target_main = getattr(args, "target_main", None)
     forward_args = list(getattr(args, "forward_args", []))
@@ -464,6 +487,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     warmup_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     warmup_parser.set_defaults(handler=_cmd_warmup)
+
+    policy_parser = subparsers.add_parser("policy", help="Policy inspection tooling.")
+    policy_subparsers = policy_parser.add_subparsers(dest="policy_command")
+    policy_subparsers.required = True
+    policy_fingerprint_parser = policy_subparsers.add_parser(
+        "fingerprint",
+        help="Print the policy's file and effective fingerprints (pin the effective one).",
+    )
+    policy_fingerprint_parser.add_argument("--policy-path", default="config/policy.yaml")
+    policy_fingerprint_parser.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON."
+    )
+    policy_fingerprint_parser.set_defaults(handler=_cmd_policy_fingerprint)
 
     confirmation_parser = subparsers.add_parser("confirmation", help="Strong confirmation tooling.")
     confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command")

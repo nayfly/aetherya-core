@@ -43,10 +43,17 @@ class ActorRateLimiter:
 
     BOUNDED STATE: windows are held in an LRU map capped at `max_actors`, and
     fully-expired windows are swept every `sweep_every` checks. Without this an
-    attacker rotating the actor field grows the map without limit. LRU order is
-    what makes eviction safe: an actor being actively rate-limited is by
-    definition recently used, so flooding cannot evict — and thereby reset — the
-    window of the actor it is trying to displace.
+    attacker rotating the actor field grows the map without limit.
+
+    EVICTION IS NOT PURELY LRU, and the difference is a security property.
+    Recency alone is not safe here: a throttled client backs off — that is the
+    correct client behaviour — which makes it the *least* recently used entry
+    and therefore the first thing plain LRU would drop. Dropping it resets its
+    limit, so an attacker could lift a victim's throttle just by flooding
+    distinct actor ids. Windows at or above the limit are consequently never
+    evicted. When no evictable window remains, a *new* actor is refused instead
+    (fail-closed): under extreme cardinality pressure the limiter denies unknown
+    actors rather than forgetting throttled ones.
     """
 
     def __init__(self, config: RateLimitConfig | None = None) -> None:
@@ -54,6 +61,14 @@ class ActorRateLimiter:
         self._lock = threading.Lock()
         self._windows: OrderedDict[str, deque[float]] = OrderedDict()
         self._checks_since_sweep = 0
+        # Number of new actors refused because capacity could not be freed
+        # without resetting a throttled window. A non-zero value means the
+        # limiter is under cardinality pressure — worth alerting on.
+        self.capacity_refusals = 0
+
+    def _prune(self, window: deque[float], cutoff: float) -> None:
+        while window and window[0] <= cutoff:
+            window.popleft()
 
     def _sweep(self, cutoff: float) -> None:
         """Drop windows whose most recent timestamp already fell out of the window."""
@@ -63,13 +78,29 @@ class ActorRateLimiter:
         for actor in stale:
             del self._windows[actor]
 
-    def _evict_to_capacity(self) -> None:
+    def _make_room_for_new_actor(self, cutoff: float) -> bool:
+        """
+        Free a slot for an actor we have not seen before.
+
+        Returns False when every retained window is at or above the limit, i.e.
+        the only way to make room would be to reset someone's throttle.
+        """
         max_actors = self._config.max_actors
-        if max_actors <= 0:
-            return
-        while len(self._windows) > max_actors:
-            # popitem(last=False) removes the least-recently-used actor.
-            self._windows.popitem(last=False)
+        if max_actors <= 0 or len(self._windows) < max_actors:
+            return True
+
+        limit = self._config.requests_per_window
+        # Least-recently-used first, but skipping throttled windows.
+        for candidate in list(self._windows):
+            window = self._windows[candidate]
+            self._prune(window, cutoff)
+            if len(window) >= limit:
+                continue  # throttled: evicting this would reset its limit
+            del self._windows[candidate]
+            if len(self._windows) < max_actors:
+                return True
+
+        return len(self._windows) < max_actors
 
     def check(self, actor: str) -> bool:
         """Return True if the request is allowed, False if throttled."""
@@ -83,22 +114,21 @@ class ActorRateLimiter:
 
             window = self._windows.get(actor)
             if window is None:
+                if not self._make_room_for_new_actor(cutoff):
+                    self.capacity_refusals += 1
+                    return False
                 window = deque()
                 self._windows[actor] = window
             else:
-                # Mark as most-recently-used so LRU eviction never targets it.
+                # Known actor: mark most-recently-used.
                 self._windows.move_to_end(actor)
 
-            # Evict timestamps outside the sliding window
-            while window and window[0] <= cutoff:
-                window.popleft()
+            self._prune(window, cutoff)
 
             if len(window) >= self._config.requests_per_window:
-                self._evict_to_capacity()
                 return False
 
             window.append(now)
-            self._evict_to_capacity()
             return True
 
     def reset(self, actor: str) -> None:

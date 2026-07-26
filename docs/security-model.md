@@ -225,9 +225,22 @@ input, and nothing surfaces that until someone diffs audit trails. Pin the
 fingerprint each process is allowed to load:
 
 ```bash
-# The fingerprint is sha256 over the policy file's exact bytes.
-export AETHERYA_EXPECTED_POLICY_FINGERPRINT="sha256:$(sha256sum config/policy.yaml | cut -d' ' -f1)"
+export AETHERYA_EXPECTED_POLICY_FINGERPRINT="$(aetherya policy fingerprint --json \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["effective_fingerprint"])')"
 ```
+
+Two fingerprints are recorded, and the pin uses the second:
+
+| Field | Hashes | Answers |
+|---|---|---|
+| `policy_fingerprint` | the file's exact bytes | which file did this replica load |
+| `effective_fingerprint` | the loaded config, defaults resolved | would it decide the same way |
+
+Hashing file bytes is wrong in both directions. Reformatting the YAML or editing
+a comment changes it without changing behaviour, and — the case that matters — a
+code upgrade that changes a *default* leaves the file untouched, so the byte hash
+is unchanged while the engine decides differently. Only the effective fingerprint
+sees that.
 
 A mismatch raises `PolicyFingerprintMismatch` at load, so the replica refuses to
 start rather than deciding under an unintended policy. `/health` reports
@@ -263,7 +276,21 @@ retention. Two independent knobs:
 
 Mirror failures increment `mirror_errors` instead of raising, so an archive
 outage does not take the decision path down. **Monitor that counter** — a mirror
-that fails silently is worse than no mirror.
+that fails silently is worse than no mirror. `/health` exposes it:
+
+| Field | Meaning |
+|---|---|
+| `audit_mirror_configured` | any sink is registered |
+| `audit_mirror_ok` | every sink has delivered and not since failed |
+| `audit_mirror_errors_total` | failed deliveries |
+| `audit_mirror_dropped_total` | events abandoned after retries or queue overflow |
+| `audit_mirror_pending_total` | queued but not yet shipped |
+| `audit_last_mirror_success` | epoch seconds of the last successful delivery |
+
+Shipped implementations: `HTTPAuditSink` (batched, bounded queue, retry — point
+it at Loki, Vector, Splunk HEC or an S3-fronting collector) and `FileAuditSink`
+(second path, e.g. a mounted volume an archival agent tails). WORM and retention
+are properties of the destination, not of the sink.
 
 Chain verification is job-friendly: `python -m aetherya.audit_verify
 --audit-path <path> --require-chain --json` exits `0` (valid), `1` (tampering

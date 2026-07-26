@@ -33,9 +33,11 @@ packages = ["aetherya"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["tests/integration"]
 addopts = "-q"
 markers = [
   "slow: marks tests as slow (requires model download, use --run-slow to include)",
+  "integration: requires external services (real Redis); set AETHERYA_TEST_REDIS_URL",
 ]
 
 [tool.coverage.run]

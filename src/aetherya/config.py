@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -249,6 +250,7 @@ class PolicyConfig:
     constitution_config: ConstitutionConfig = field(default_factory=ConstitutionConfig)
     intent_escalation: IntentEscalationConfig = field(default_factory=IntentEscalationConfig)
     rate_limit: RateLimitBackendConfig = field(default_factory=RateLimitBackendConfig)
+    effective_fingerprint: str | None = None
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -258,7 +260,39 @@ def _require(d: dict[str, Any], key: str) -> Any:
 
 
 def _policy_fingerprint(raw_text: str) -> str:
+    """Hash of the policy file's exact bytes — provenance, not behaviour."""
     return f"sha256:{hashlib.sha256(raw_text.encode('utf-8')).hexdigest()}"
+
+
+# Fields that describe the fingerprints themselves, excluded from the material
+# they are computed over.
+_FINGERPRINT_FIELDS: frozenset[str] = frozenset({"policy_fingerprint", "effective_fingerprint"})
+
+
+def compute_effective_fingerprint(config: PolicyConfig) -> str:
+    """
+    Hash of the *effective* policy: every loaded value with defaults resolved,
+    serialized canonically.
+
+    This is the identity that matters for behaviour, and it differs from the
+    file hash in both directions:
+
+    - Reformatting the YAML, reordering keys or editing comments changes the
+      file hash but not this one. Pinning on file bytes would reject a
+      cosmetically-edited but behaviourally identical policy.
+    - A code upgrade that changes a *default* leaves the file untouched, so the
+      file hash is unchanged while the engine now decides differently. That is
+      precisely the silent divergence pinning exists to catch, and only this
+      fingerprint sees it.
+
+    Both are recorded: `policy_fingerprint` answers "which file did this replica
+    load", `effective_fingerprint` answers "would it decide the same way".
+    """
+    material = {
+        key: value for key, value in asdict(config).items() if key not in _FINGERPRINT_FIELDS
+    }
+    canonical = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 def _load_execution_gate(raw: dict[str, Any] | None) -> ExecutionGateConfig:
@@ -656,12 +690,7 @@ def load_policy_config(
     rate_limit = _load_rate_limit(data.get("rate_limit"))
     _validate_semantic_authority(constitution_config, modes)
 
-    fingerprint = _policy_fingerprint(raw_text)
-    pinned = expected_policy_fingerprint(expected_fingerprint)
-    if pinned is not None and fingerprint != pinned:
-        raise PolicyFingerprintMismatch(pinned, fingerprint)
-
-    return PolicyConfig(
+    config = PolicyConfig(
         version=version,
         modes=modes,
         aggregator=aggregator,
@@ -671,9 +700,19 @@ def load_policy_config(
         confirmation=confirmation,
         llm_shadow=llm_shadow,
         policy_adapter_shadow=policy_adapter_shadow,
-        policy_fingerprint=fingerprint,
+        policy_fingerprint=_policy_fingerprint(raw_text),
         output_gate_config=output_gate_config,
         constitution_config=constitution_config,
         intent_escalation=intent_escalation,
         rate_limit=rate_limit,
     )
+    config = replace(config, effective_fingerprint=compute_effective_fingerprint(config))
+
+    # The pin is checked against the effective fingerprint, not the file bytes:
+    # what must match across replicas is how they decide, not how the YAML is
+    # formatted.
+    pinned = expected_policy_fingerprint(expected_fingerprint)
+    if pinned is not None and config.effective_fingerprint != pinned:
+        raise PolicyFingerprintMismatch(pinned, config.effective_fingerprint)
+
+    return config
