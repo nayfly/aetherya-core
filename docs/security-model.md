@@ -71,7 +71,9 @@ to literal substring matching so custom operator rules keep working.
 | `rm -rf /` | root recursive delete — `-rf`, `-fr`, `-r -f`, `--recursive --force`, `--no-preserve-root`, and top-level system paths (`/etc`, `/usr`, `/var`, …) | 100 (hard-deny) |
 | `mkfs` | filesystem format — **requires a `/dev/` argument** | 100 (hard-deny) |
 | `:(){:\|:&};:` | fork bomb, tolerant to spacing | 100 (hard-deny) |
-| `block_device_write` | `dd of=/dev/sdX`, `> /dev/sdX`, `shred`/`wipefs` on a device | 100 (hard-deny) |
+| `block_device_write` | `dd of=/dev/sdX`, `> /dev/sdX`, `shred`/`wipefs`/`tee`/`truncate` on a device | 100 (hard-deny) |
+| `interpreter_destruction` | `shutil.rmtree('/')` inside an interpreter one-liner | 100 (hard-deny) |
+| `find_delete` | `find / … -delete` | 100 (hard-deny) |
 | `recursive_force_delete` | `rm -rf` on a **non-root** path | 55 (confirm) |
 | `remote_code_execution` | `curl`/`wget` piped into a shell | 70 |
 
@@ -83,6 +85,27 @@ confirmation band instead.
 **Discussion is not execution.** Rules are anchored on command arguments, so
 `explain what mkfs does` and `What does rm -rf do?` do not fire — the first has
 no device argument, the second no path target.
+
+### Evasion coverage
+
+The corpus is exercised by a pinned regression fixture,
+`tests/fixtures/security_corpus/v1/procedural_evasions.json` (26 cases). All are
+refused; the split reflects what is knowable from the text alone.
+
+**Hard-denied** — destructive intent unambiguous: shell quoting and escapes
+(`r''m -rf /`, `rm -rf '/'`, `/et\c`), whitespace variants (tabs, repeated
+spaces, embedded newlines), command prefixes (`env`, `sudo sh -c`), block-device
+writes, interpreter one-liners, `find / -delete`.
+
+**Escalated to confirmation** — the target only resolves at execution time, so
+the text cannot justify a hard deny: variable expansion (`$CMD -rf /`,
+`rm -rf $P`), command substitution, base64-then-`sh`, `cd / && rm -rf .`,
+`ls / | xargs rm -rf`.
+
+**Known limits.** Detection is textual. Arbitrary computed indirection — a
+destructive command assembled at runtime from data the engine never sees —
+cannot be resolved statically and is out of scope; that is what the confirmation
+band and the capability matrix are for.
 
 **Multi-match behavior:** all matching rules are collected. Score, confidence
 and reason come from the highest-severity match; the tag list is the de-duplicated
@@ -168,3 +191,80 @@ AETHERYA_ATTESTATION_KEY="your-key" python -m aetherya.audit_verify \
 ```
 
 Detects: reordered events, tampered payloads, missing chain links.
+
+---
+
+## Deployment Contracts
+
+Properties the engine cannot enforce from inside a single process, and how they
+are surfaced.
+
+### Rate limiting across replicas
+
+`rate_limit.backend: memory` keeps windows in process memory. Behind N workers
+the effective limit is `N x requests_per_window` — the configured limit is not
+the limit that applies. Any multi-worker or multi-replica deployment must set
+`backend: redis`.
+
+```yaml
+rate_limit:
+  backend: redis
+  requests_per_window: 60
+  window_seconds: 60.0
+  redis_url_env: AETHERYA_RATE_LIMIT_REDIS_URL
+```
+
+The Redis backend **fails closed**: if Redis is unreachable, `check()` returns
+False and the pipeline records `fail_closed:rate_limit`. A limiter that fails
+open is not a limiter.
+
+### Policy version pinning
+
+Two replicas running different policies return different decisions for identical
+input, and nothing surfaces that until someone diffs audit trails. Pin the
+fingerprint each process is allowed to load:
+
+```bash
+# The fingerprint is sha256 over the policy file's exact bytes.
+export AETHERYA_EXPECTED_POLICY_FINGERPRINT="sha256:$(sha256sum config/policy.yaml | cut -d' ' -f1)"
+```
+
+A mismatch raises `PolicyFingerprintMismatch` at load, so the replica refuses to
+start rather than deciding under an unintended policy. `/health` reports
+`policy_fingerprint`, `policy_fingerprint_pinned` and `policy_fingerprint_match`.
+
+### Semantic layer readiness
+
+The advisory layer declines to run on a cold model (see *Determinism and the
+semantic layer* in the architecture doc), which makes it a silent no-op in any
+deployment that never warms it. `/health` exposes the actual state:
+
+| Field | Meaning |
+|---|---|
+| `semantic_enabled` | the policy asks for the layer |
+| `semantic_model_warm` | the model is in the process cache |
+| `semantic_ready` | the layer will actually participate in decisions |
+| `degraded` | enabled but not ready — decisions run keyword-only |
+
+The API server warms the model before accepting traffic. Use
+`--require-semantic-ready` to fail startup instead of serving degraded.
+
+### Audit retention
+
+A local JSONL file does not survive an ephemeral container and offers no
+retention. Two independent knobs:
+
+- `AuditLogger(..., fsync=True)` — forces each event to disk before returning.
+  Costs a syscall per decision; without it a hard kill can leave the on-disk
+  chain shorter than what the process believed it wrote.
+- `AuditLogger(..., mirrors=[sink])` — fans each event out to append-only
+  storage. The mirror receives the byte-identical line the primary wrote, so
+  chain verification produces the same result on either copy.
+
+Mirror failures increment `mirror_errors` instead of raising, so an archive
+outage does not take the decision path down. **Monitor that counter** — a mirror
+that fails silently is worse than no mirror.
+
+Chain verification is job-friendly: `python -m aetherya.audit_verify
+--audit-path <path> --require-chain --json` exits `0` (valid), `1` (tampering
+detected) or `2` (unreadable), suitable for a cron or Kubernetes Job.

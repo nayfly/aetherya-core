@@ -9,6 +9,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from aetherya.api import AetheryaAPI, APISettings
+from aetherya.config import load_policy_config
+from aetherya.constitution import warmup_semantic_model
 
 
 class RequestTooLargeError(ValueError):
@@ -484,6 +486,44 @@ def build_server(
     return ThreadingHTTPServer((host, port), handler)
 
 
+def warmup_semantic_layer(
+    *,
+    policy_path: Path,
+    warmup_semantic: bool = True,
+    require_semantic_ready: bool = False,
+) -> bool:
+    """
+    Preload the semantic model before the server accepts traffic.
+
+    With `require_warm_semantic_model` the advisory layer declines to run on a
+    cold model, so without this a long-lived server would answer every request
+    with the layer silently inactive. Doing it at startup keeps the multi-second
+    load out of the decision path entirely.
+
+    Returns True when the layer is ready. When it is not and
+    `require_semantic_ready` is set, startup fails rather than serving in a
+    degraded state that only /health would reveal.
+    """
+    cfg = load_policy_config(policy_path)
+    if not (cfg.constitution_config.use_semantic and warmup_semantic):
+        return False
+
+    try:
+        warmup_semantic_model()
+        return True
+    except Exception as exc:
+        if require_semantic_ready:
+            raise RuntimeError(
+                f"semantic layer requested but unavailable: {type(exc).__name__}: {exc}"
+            ) from exc
+        print(
+            f"warning: semantic warmup failed ({type(exc).__name__}: {exc}); "
+            "the advisory layer will be skipped — /health reports degraded=true",
+            file=sys.stderr,
+        )
+        return False
+
+
 def serve_api(
     *,
     host: str,
@@ -497,7 +537,15 @@ def serve_api(
     enable_decide_routes: bool = True,
     enable_audit_routes: bool = True,
     enable_approval_routes: bool = True,
+    warmup_semantic: bool = True,
+    require_semantic_ready: bool = False,
 ) -> None:
+    warmup_semantic_layer(
+        policy_path=policy_path,
+        warmup_semantic=warmup_semantic,
+        require_semantic_ready=require_semantic_ready,
+    )
+
     settings = APISettings(
         policy_path=policy_path,
         audit_path=audit_path,
@@ -530,6 +578,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--constitution-path", default=None)
     parser.add_argument("--default-actor", default="robert")
     parser.add_argument("--max-body-bytes", type=int, default=1_048_576)
+    parser.add_argument(
+        "--no-warmup-semantic",
+        action="store_true",
+        help=(
+            "Skip preloading the semantic model at startup. The advisory layer "
+            "then stays inactive until something warms it; /health reports "
+            "degraded=true."
+        ),
+    )
+    parser.add_argument(
+        "--require-semantic-ready",
+        action="store_true",
+        help=(
+            "Fail startup if the semantic layer is enabled in policy but cannot "
+            "be loaded, instead of serving in a degraded state."
+        ),
+    )
     parser.add_argument(
         "--service-mode",
         choices=["all", "decision", "approvals"],
@@ -566,6 +631,8 @@ def main(argv: list[str] | None = None) -> int:
             enable_decide_routes=enable_decide_routes,
             enable_audit_routes=enable_audit_routes,
             enable_approval_routes=enable_approval_routes,
+            warmup_semantic=not bool(args.no_warmup_semantic),
+            require_semantic_ready=bool(args.require_semantic_ready),
         )
         return 0
     except KeyboardInterrupt:

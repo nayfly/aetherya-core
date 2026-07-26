@@ -4,6 +4,8 @@ import re
 import unicodedata
 
 _WHITESPACE_RE = re.compile(r"\s+")
+_QUOTE_RE = re.compile(r"['\"]")
+_ESCAPE_RE = re.compile(r"\\(?=\S)")
 
 
 def normalize_security_text(text: str) -> str:
@@ -11,12 +13,18 @@ def normalize_security_text(text: str) -> str:
     Normalize text before security pattern matching.
 
     Pipeline: lowercase -> NFKD decomposition -> strip combining characters and
-    Unicode format characters -> compact whitespace.
+    Unicode format characters -> strip quotes and escape backslashes -> compact
+    whitespace.
 
     This eliminates:
     - Zero-width chars (U+200B/C/D, U+FEFF, etc.) - Unicode category 'Cf'
     - Diacritic variants (ignore -> ignore, Einschraenkungen -> einschrankungen)
     - Fullwidth char decompositions via NFKD
+    - Token splitting via quotes or escapes: `r''m`, `"rm"`, `/et\\c` and
+      `ign''ore previous instructions` all collapse to their plain form.
+      Quoting is syntactic to a shell and semantically inert in prose, but it
+      splits any literal a pattern is anchored on — verified as a live bypass in
+      both guards before this step existed.
 
     It does NOT handle ASCII l33tspeak (1gn0r3) - that substitution step
     carries meaningful false-positive risk for legitimate inputs.
@@ -32,4 +40,5 @@ def normalize_security_text(text: str) -> str:
     stripped = "".join(
         ch for ch in folded if not unicodedata.combining(ch) and unicodedata.category(ch) != "Cf"
     )
-    return _WHITESPACE_RE.sub(" ", stripped).strip()
+    unquoted = _ESCAPE_RE.sub("", _QUOTE_RE.sub("", stripped))
+    return _WHITESPACE_RE.sub(" ", unquoted).strip()

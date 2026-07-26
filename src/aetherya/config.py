@@ -1,11 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# Pin the policy a process is allowed to run. Deployments set this to the
+# fingerprint they intend to ship; a replica loading anything else refuses to
+# start rather than silently deciding under a different policy than its peers.
+POLICY_FINGERPRINT_ENV = "AETHERYA_EXPECTED_POLICY_FINGERPRINT"
+
+
+class PolicyFingerprintMismatch(ValueError):
+    """Raised when a loaded policy does not match the pinned fingerprint."""
+
+    def __init__(self, expected: str, actual: str | None) -> None:
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"policy fingerprint mismatch: expected {expected}, loaded {actual}. "
+            "Replicas running different policies produce divergent decisions for "
+            f"identical input; set {POLICY_FINGERPRINT_ENV} to the intended value "
+            "or deploy the matching policy file."
+        )
+
+
+def expected_policy_fingerprint(explicit: str | None = None) -> str | None:
+    """Resolve the pinned fingerprint from an explicit value or the environment."""
+    if explicit is not None:
+        cleaned = explicit.strip()
+        return cleaned or None
+    from_env = os.getenv(POLICY_FINGERPRINT_ENV, "").strip()
+    return from_env or None
 
 
 @dataclass(frozen=True)
@@ -163,6 +192,26 @@ class ConstitutionConfig:
 
 
 @dataclass(frozen=True)
+class RateLimitBackendConfig:
+    """
+    Rate limiter backend selection.
+
+    backend: "memory" (single process only) or "redis" (shared across workers).
+      With "memory" behind N workers the effective limit is N x requests_per_window,
+      so any multi-replica deployment must use "redis".
+
+    redis_url_env / redis_prefix: connection settings for the redis backend.
+    """
+
+    backend: str = "memory"
+    requests_per_window: int = 60
+    window_seconds: float = 60.0
+    max_actors: int = 10_000
+    redis_url_env: str = "AETHERYA_RATE_LIMIT_REDIS_URL"
+    redis_prefix: str = "aetherya:ratelimit"
+
+
+@dataclass(frozen=True)
 class IntentEscalationConfig:
     """
     Configuration for the IntentEscalation stage.
@@ -199,6 +248,7 @@ class PolicyConfig:
     output_gate_config: OutputGateConfig = field(default_factory=OutputGateConfig)
     constitution_config: ConstitutionConfig = field(default_factory=ConstitutionConfig)
     intent_escalation: IntentEscalationConfig = field(default_factory=IntentEscalationConfig)
+    rate_limit: RateLimitBackendConfig = field(default_factory=RateLimitBackendConfig)
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -528,7 +578,43 @@ def _load_intent_escalation(raw: dict[str, Any] | None) -> IntentEscalationConfi
     )
 
 
-def load_policy_config(path: str | Path) -> PolicyConfig:
+def _load_rate_limit(raw: dict[str, Any] | None) -> RateLimitBackendConfig:
+    data = raw or {}
+    backend = str(data.get("backend", "memory")).strip().lower()
+    if backend not in {"memory", "redis"}:
+        raise ValueError("rate_limit.backend must be one of: memory, redis")
+
+    requests_per_window = int(data.get("requests_per_window", 60))
+    window_seconds = float(data.get("window_seconds", 60.0))
+    if requests_per_window < 1:
+        raise ValueError("rate_limit.requests_per_window must be >= 1")
+    if window_seconds <= 0.0:
+        raise ValueError("rate_limit.window_seconds must be > 0")
+
+    return RateLimitBackendConfig(
+        backend=backend,
+        requests_per_window=requests_per_window,
+        window_seconds=window_seconds,
+        max_actors=int(data.get("max_actors", 10_000)),
+        redis_url_env=str(data.get("redis_url_env", "AETHERYA_RATE_LIMIT_REDIS_URL")).strip(),
+        redis_prefix=str(data.get("redis_prefix", "aetherya:ratelimit")).strip(),
+    )
+
+
+def load_policy_config(
+    path: str | Path,
+    expected_fingerprint: str | None = None,
+) -> PolicyConfig:
+    """
+    Load and validate a policy file.
+
+    If a fingerprint is pinned — via `expected_fingerprint` or the
+    `AETHERYA_EXPECTED_POLICY_FINGERPRINT` environment variable — the loaded
+    policy must match it or loading fails. This is what stops two replicas from
+    quietly running different policies and returning different decisions for the
+    same input: without it, a stale config on one node is invisible until
+    someone compares audit trails.
+    """
     path = Path(path)
     raw_text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(raw_text)
@@ -567,7 +653,13 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
     output_gate_config = _load_output_gate(data.get("output_gate"))
     constitution_config = _load_constitution_config(data.get("constitution"))
     intent_escalation = _load_intent_escalation(data.get("intent_escalation"))
+    rate_limit = _load_rate_limit(data.get("rate_limit"))
     _validate_semantic_authority(constitution_config, modes)
+
+    fingerprint = _policy_fingerprint(raw_text)
+    pinned = expected_policy_fingerprint(expected_fingerprint)
+    if pinned is not None and fingerprint != pinned:
+        raise PolicyFingerprintMismatch(pinned, fingerprint)
 
     return PolicyConfig(
         version=version,
@@ -579,8 +671,9 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
         confirmation=confirmation,
         llm_shadow=llm_shadow,
         policy_adapter_shadow=policy_adapter_shadow,
-        policy_fingerprint=_policy_fingerprint(raw_text),
+        policy_fingerprint=fingerprint,
         output_gate_config=output_gate_config,
         constitution_config=constitution_config,
         intent_escalation=intent_escalation,
+        rate_limit=rate_limit,
     )

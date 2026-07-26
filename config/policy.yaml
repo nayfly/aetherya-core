@@ -39,7 +39,9 @@ procedural_guard:
     - "rm -rf /"                # root recursive delete: -rf, -fr, -r -f, --no-preserve-root
     - "mkfs"                    # filesystem format — requires a /dev/ argument
     - ":(){:|:&};:"             # classic fork bomb
-    - "block_device_write"      # dd of=/dev/sdX, > /dev/sdX, shred|wipefs /dev/X
+    - "block_device_write"      # dd of=/dev/sdX, > /dev/sdX, shred|wipefs|tee|truncate /dev/X
+    - "interpreter_destruction" # shutil.rmtree('/') inside a python -c one-liner
+    - "find_delete"             # find / ... -delete
     - "recursive_force_delete"  # rm -rf on a non-root path (risk 55, not hard-deny)
     - "remote_code_execution"   # curl|wget piped into a shell (risk 70)
   privileged_ops:
@@ -141,6 +143,19 @@ llm_shadow:
 policy_adapter_shadow:
   enabled: false
   max_signals: 3
+
+# Rate limiting. The "memory" backend keeps windows in process memory, so behind
+# N workers the effective limit is N x requests_per_window — the configured limit
+# is simply not the limit that applies. Any multi-worker or multi-replica
+# deployment must use "redis". The redis backend fails closed: if Redis is
+# unreachable the request is refused rather than silently going unlimited.
+rate_limit:
+  backend: memory              # memory | redis
+  requests_per_window: 60
+  window_seconds: 60.0
+  max_actors: 10000            # memory backend only: LRU cap against actor-id flooding
+  redis_url_env: AETHERYA_RATE_LIMIT_REDIS_URL
+  redis_prefix: "aetherya:ratelimit"
 
 # Intent escalation — decouples the guard chain from the parser's verb list.
 # ExecutionGate and the capability matrix only evaluate `operate` requests, so

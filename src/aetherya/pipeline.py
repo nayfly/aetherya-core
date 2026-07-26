@@ -4,7 +4,12 @@ import concurrent.futures
 import hashlib
 from typing import Any
 
-from aetherya.actions import Decision, validate_action_request, validate_actor
+from aetherya.actions import (
+    ActionRequest,
+    Decision,
+    validate_action_request,
+    validate_actor,
+)
 from aetherya.audit import AuditLogger
 from aetherya.capability_gate import CapabilityGate
 from aetherya.config import (
@@ -282,9 +287,29 @@ def run_pipeline(
     audit: AuditLogger | None = None,
     response_text: str | None = None,
     rate_limiter: ActorRateLimiter | None = None,
+    action: ActionRequest | None = None,
 ) -> Decision:
+    """
+    Evaluate an action and return a Decision.
+
+    `action` is the **preferred** entry point for programmatic integrations: pass
+    a fully-formed `ActionRequest` and the heuristic parser is skipped entirely,
+    removing text classification from the trust path. `action.raw_input` is then
+    authoritative and the positional `raw_input` argument is ignored.
+
+    Omitting `action` runs `parse_user_input` over the raw text. That path exists
+    for the CLI and for callers that only have free text; it infers `intent`,
+    `tool`, `target` and parameters from regexes and is therefore best-effort.
+    See `run_pipeline_structured` and docs/integrations.md.
+
+    Note that every other stage is unchanged between the two paths: a structured
+    caller still passes the ABI contract check, and IntentEscalation still runs,
+    so declaring `intent="ask"` on a destructive payload does not bypass anything.
+    """
     # SAFE DEFAULT
     mode: Mode = Mode.CONSULTIVE
+    if action is not None:
+        raw_input = action.raw_input or raw_input
     safe_actor = actor if isinstance(actor, str) and actor.strip() else "unknown"
     policy_fingerprint = _policy_fingerprint(cfg)
 
@@ -332,18 +357,21 @@ def run_pipeline(
         )
 
     # 1) Parse + action request contract + modo (fail-closed si peta)
-    try:
-        action = parse_user_input(raw_input)
-    except Exception as exc:
-        return _fail_closed(
-            raw_input=raw_input,
-            actor=actor,
-            mode=mode,
-            stage="parse_user_input",
-            exc=exc,
-            audit=audit,
-            policy_fingerprint=policy_fingerprint,
-        )
+    # A structured caller supplied the ActionRequest directly; the heuristic
+    # parser is skipped, but every contract and guard below still applies.
+    if action is None:
+        try:
+            action = parse_user_input(raw_input)
+        except Exception as exc:
+            return _fail_closed(
+                raw_input=raw_input,
+                actor=actor,
+                mode=mode,
+                stage="parse_user_input",
+                exc=exc,
+                audit=audit,
+                policy_fingerprint=policy_fingerprint,
+            )
 
     try:
         action = validate_action_request(action)
@@ -920,3 +948,35 @@ def run_pipeline(
             pass
 
     return final
+
+
+def run_pipeline_structured(
+    action: ActionRequest,
+    constitution: Constitution,
+    actor: str,
+    cfg: PolicyConfig,
+    audit: AuditLogger | None = None,
+    response_text: str | None = None,
+    rate_limiter: ActorRateLimiter | None = None,
+) -> Decision:
+    """
+    Preferred entry point for programmatic integrations.
+
+    Takes a fully-formed `ActionRequest` — intent, tool, target and parameters
+    declared explicitly — so no part of the decision depends on inferring
+    structure from free text. Agent runtimes already know which tool they are
+    about to call and with what arguments; passing that through directly removes
+    the parser's regex heuristics from the trust path entirely.
+
+    Equivalent to `run_pipeline(action.raw_input, ..., action=action)`.
+    """
+    return run_pipeline(
+        action.raw_input,
+        constitution=constitution,
+        actor=actor,
+        cfg=cfg,
+        audit=audit,
+        response_text=response_text,
+        rate_limiter=rate_limiter,
+        action=action,
+    )

@@ -269,6 +269,27 @@ _CRITICAL_FAMILIES: dict[str, tuple[ProceduralRule, ...]] = {
             # ("shred -n 3 /dev/sda") so options are not enumerated individually.
             pattern=r"\b(?:shred|wipefs)\b[^|;&]{0,60}?\s/dev/\S+",
         ),
+        _critical(
+            # Any write path to a raw device destroys it as thoroughly as dd.
+            "block_device_write_tool",
+            pattern=r"\b(?:tee|truncate)\b[^|;&]{0,60}?\s/dev/\S+",
+        ),
+    ),
+    "interpreter_destruction": (
+        _critical(
+            # Destruction embedded in an interpreter one-liner bypasses every
+            # shell-command rule. Anchored on the destructive call and its
+            # root argument rather than on the interpreter, so it holds whether
+            # the code arrives via `python -c`, a heredoc, or a script body.
+            "interpreter_recursive_delete",
+            pattern=r"\brmtree\s*\(\s*/",
+        ),
+    ),
+    "find_delete": (
+        _critical(
+            "find_delete_root",
+            pattern=r"\bfind\s+/\s[^|;&]{0,80}?-delete\b",
+        ),
     ),
 }
 
