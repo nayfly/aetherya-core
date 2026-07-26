@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from typing import TypedDict
+
+from aetherya.text_normalize import normalize_security_text
 
 
 class JailbreakResult(TypedDict):
@@ -16,27 +17,11 @@ def _normalize_jailbreak_text(text: str) -> str:
     """
     Normalize text for jailbreak detection.
 
-    Pipeline: lowercase → NFKD decomposition → strip combining characters and
-    Unicode format characters → compact whitespace.
-
-    This eliminates:
-    - Zero-width chars (U+200B/C/D, U+FEFF, etc.) — Unicode category 'Cf'
-    - Diacritic variants (ïgnore → ignore, Einschränkungen → einschrankungen)
-    - Fullwidth char decompositions via NFKD
-
-    It does NOT handle ASCII l33tspeak (1gn0r3) — that substitution step
-    carries meaningful false-positive risk for legitimate inputs.
+    Thin alias over the shared security normalizer — kept as a named function
+    because the jailbreak test-suite targets it directly.
+    See `aetherya.text_normalize.normalize_security_text`.
     """
-    lowered = text.lower()
-    folded = unicodedata.normalize("NFKD", lowered)
-    # Strip combining diacritics AND Unicode format/invisible characters (category Cf).
-    # Category Cf covers: zero-width space (U+200B), zero-width non-joiner (U+200C),
-    # zero-width joiner (U+200D), BOM (U+FEFF), soft hyphen (U+00AD), etc.
-    ascii_only = "".join(
-        ch for ch in folded if not unicodedata.combining(ch) and unicodedata.category(ch) != "Cf"
-    )
-    compact = re.sub(r"\s+", " ", ascii_only).strip()
-    return compact
+    return normalize_security_text(text)
 
 
 class JailbreakGuard:

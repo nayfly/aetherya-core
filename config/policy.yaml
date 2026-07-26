@@ -29,10 +29,19 @@ aggregator:
     - "tag:capability_tool_denied"
 
 procedural_guard:
+  # Each entry activates a rule family in procedural_guard.py. The legacy
+  # literals ("rm -rf /", "mkfs", ":(){:|:&};:") now expand to flag-order
+  # tolerant, device-anchored patterns instead of naive substring matching.
+  # Symbolic keys activate families that have no single literal form. An
+  # unrecognised entry degrades to literal substring matching, so custom
+  # operator rules keep working unchanged.
   critical_tags:
-    - "rm -rf /"
-    - "mkfs"
-    - ":(){:|:&};:"   # fork bomb clásica
+    - "rm -rf /"                # root recursive delete: -rf, -fr, -r -f, --no-preserve-root
+    - "mkfs"                    # filesystem format — requires a /dev/ argument
+    - ":(){:|:&};:"             # classic fork bomb
+    - "block_device_write"      # dd of=/dev/sdX, > /dev/sdX, shred|wipefs /dev/X
+    - "recursive_force_delete"  # rm -rf on a non-root path (risk 55, not hard-deny)
+    - "remote_code_execution"   # curl|wget piped into a shell (risk 70)
   privileged_ops:
     - "apt remove"
     - "apt purge"
@@ -133,6 +142,16 @@ policy_adapter_shadow:
   enabled: false
   max_signals: 3
 
+# Intent escalation — decouples the guard chain from the parser's verb list.
+# ExecutionGate and the capability matrix only evaluate `operate` requests, so
+# without this stage a command the parser does not recognise (e.g.
+# `dd if=/dev/zero of=/dev/sda`) skips both gates and can reach `allow`.
+# Escalation is monotone: it only ever raises ask/consultive -> operate/operative.
+intent_escalation:
+  enabled: true
+  use_procedural_signal: true   # any ProceduralGuard hit implies operative content
+  use_shape_signals: true       # $(...), pipe-to-shell, > /path, binary+flags, sudo X
+
 # OutputGate contract configuration.
 # require_candidate_response: false (default) means OutputGate is opt-in —
 # the caller chooses whether to pass candidate_response to run_pipeline.
@@ -149,3 +168,18 @@ constitution:
   use_semantic: true
   semantic_violation_threshold: 0.55
   semantic_gray_zone_threshold: 0.35
+  # NON-AUTHORITATIVE CONTRACT: the semantic layer is the only learned component
+  # in the decision path. Its risk contribution is capped here so it can raise a
+  # request to `escalate` (a human decides) but never to `deny` on its own.
+  # Must stay strictly below every mode's deny_at — validated at policy load.
+  # This is what keeps the *core verdict* deterministic: swapping the model can
+  # change whether a human is asked, never whether an action is refused.
+  semantic_max_risk: 60
+  # Loading all-MiniLM-L6-v2 costs ~5s in a fresh process. That belongs at
+  # deployment startup (`aetherya warmup`), never inside a decision. With this
+  # set, the advisory layer declines to run when the model is not already in the
+  # process cache instead of stalling the decision path; the trace then carries
+  # `constitution.semantic_skipped: model_not_warm`. Long-lived servers should
+  # call `aetherya warmup` at boot so the layer is always available.
+  # Set to false only if you accept a multi-second cold load inside a decision.
+  require_warm_semantic_model: true

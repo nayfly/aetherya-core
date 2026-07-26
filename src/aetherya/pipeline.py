@@ -13,6 +13,7 @@ from aetherya.config import (
     ConfirmationEvidenceConfig,
     ConfirmationRequireConfig,
     ExecutionGateConfig,
+    IntentEscalationConfig,
     LLMShadowConfig,
     OutputGateConfig,
     PolicyAdapterShadowConfig,
@@ -22,6 +23,7 @@ from aetherya.confirmation_gate import ConfirmationGate, ConfirmationOutcome
 from aetherya.constitution import Constitution
 from aetherya.execution_gate import ExecutionGate
 from aetherya.explainability import ExplainabilityEngine
+from aetherya.intent_escalation import IntentEscalator, apply_escalation
 from aetherya.jailbreak import JailbreakGuard
 from aetherya.llm_provider import (
     AnthropicLLMProvider,
@@ -77,6 +79,13 @@ def _execution_gate_cfg(cfg: PolicyConfig | Any) -> ExecutionGateConfig:
     if isinstance(gate_cfg, ExecutionGateConfig):
         return gate_cfg
     return _default_execution_gate_config()
+
+
+def _intent_escalation_cfg(cfg: PolicyConfig | Any) -> IntentEscalationConfig:
+    escalation_cfg = getattr(cfg, "intent_escalation", None)
+    if isinstance(escalation_cfg, IntentEscalationConfig):
+        return escalation_cfg
+    return IntentEscalationConfig()
 
 
 def _default_capability_matrix_config() -> CapabilityMatrixConfig:
@@ -349,6 +358,38 @@ def run_pipeline(
             policy_fingerprint=policy_fingerprint,
         )
 
+    # 1.5) Intent escalation — decouples the downstream gates from the parser.
+    # ExecutionGate and CapabilityGate only evaluate `operate` requests; without
+    # this stage an executable command using a verb the parser does not know
+    # would skip both gates entirely. Escalation is monotone (ask → operate only).
+    intent_escalation: dict[str, Any] | None = None
+    try:
+        escalation = IntentEscalator(
+            _intent_escalation_cfg(cfg),
+            procedural_cfg=getattr(cfg, "procedural_guard", None),
+        ).evaluate(action=action, raw_input=raw_input)
+        if escalation.escalated:
+            action = apply_escalation(action, escalation)
+            intent_escalation = {
+                "escalated": True,
+                "from_intent": escalation.from_intent,
+                "to_intent": escalation.to_intent,
+                "from_mode": escalation.from_mode,
+                "to_mode": escalation.to_mode,
+                "tags": list(escalation.tags),
+                "reason": escalation.reason,
+            }
+    except Exception as exc:
+        return _fail_closed(
+            raw_input=raw_input,
+            actor=actor,
+            mode=mode,
+            stage="intent_escalation",
+            exc=exc,
+            audit=audit,
+            policy_fingerprint=policy_fingerprint,
+        )
+
     try:
         mode = Mode(action.mode_hint) if action.mode_hint else Mode.CONSULTIVE
     except Exception as exc:  # ValueError típico
@@ -477,6 +518,17 @@ def run_pipeline(
         sem_score = c.get("semantic_score")
         if sem_score is not None:
             constitution_extra["semantic_score"] = float(sem_score)
+        # Record which model produced the advisory signal: the semantic layer is
+        # the one non-deterministic input to the decision, so the audit trail
+        # must show that a learned component was involved and which one.
+        sem_model = c.get("semantic_model")
+        if isinstance(sem_model, str) and sem_model.strip():
+            constitution_extra["semantic_model"] = sem_model.strip()
+        # When the advisory layer declined to run, say so explicitly rather than
+        # leaving the trace indistinguishable from "semantic found nothing".
+        sem_skipped = c.get("semantic_skipped")
+        if isinstance(sem_skipped, str) and sem_skipped.strip():
+            constitution_extra["semantic_skipped"] = sem_skipped.strip()
         signals.append(
             RiskSignal(
                 source="constitution",
@@ -846,6 +898,8 @@ def run_pipeline(
             }
             if explainability:
                 context["explainability"] = explainability
+            if intent_escalation:
+                context["intent_escalation"] = intent_escalation
             if constitution_extra:
                 context["constitution"] = constitution_extra
             if output_gate:

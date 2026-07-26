@@ -9,6 +9,7 @@ import pytest
 
 from aetherya.actions import ActionRequest
 from aetherya.constitution import (
+    DEFAULT_SEMANTIC_MODEL,
     Constitution,
     FastKeywordEvaluator,
     Principle,
@@ -191,13 +192,21 @@ def test_fast_evaluator_short_text_is_ambiguous() -> None:
     assert result["confidence"] < 0.7
 
 
-def test_fast_evaluator_long_clean_text_not_ambiguous() -> None:
+def test_fast_evaluator_long_clean_text_is_still_ambiguous() -> None:
+    """
+    Ambiguity is about evidence, not length.
+
+    A long input with no keyword evidence is exactly where keyword matching
+    fails — a paraphrased attack has more room to hide in long text, not less.
+    It must therefore still reach the semantic layer. Length only modulates the
+    confidence the fast layer reports in its own "clean" verdict.
+    """
     ev = FastKeywordEvaluator([])
     result = ev.evaluate(
         "explain the backup strategy for the system in detail please"
     )  # >10 tokens
     assert result["allowed"] is True
-    assert result["ambiguous"] is False
+    assert result["ambiguous"] is True
     assert result["confidence"] >= 0.7
 
 
@@ -389,8 +398,9 @@ def test_constitution_semantic_path_detects_without_keywords(
     """Ambiguous short input should go to semantic layer and detect a violation."""
     import aetherya.constitution as c_mod
 
-    # Patch _default_model_factory to return a high-similarity model
-    monkeypatch.setattr(c_mod, "_default_model_factory", lambda _: _make_mock_model(0.8))
+    # Prime the process cache so the model counts as warm — the advisory layer
+    # declines to run on a cold model (see Constitution.require_warm_semantic_model).
+    monkeypatch.setitem(c_mod._MODEL_CACHE, DEFAULT_SEMANTIC_MODEL, _make_mock_model(0.8))
 
     core = Constitution(
         [Principle("Non-harm", "Do not cause harm", priority=1, keywords=[], risk=90)],
@@ -424,10 +434,13 @@ def test_constitution_use_semantic_false_never_loads_model(
 def test_constitution_semantic_fallback_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """If semantic layer raises, constitution falls back to degraded fast result."""
 
-    def bad_factory(_name: str) -> Any:
-        raise ImportError("sentence_transformers not available")
+    class _ExplodingModel:
+        def encode(self, texts: list[str]) -> Any:
+            raise ImportError("sentence_transformers not available")
 
-    monkeypatch.setattr("aetherya.constitution._default_model_factory", bad_factory)
+    import aetherya.constitution as c_mod
+
+    monkeypatch.setitem(c_mod._MODEL_CACHE, DEFAULT_SEMANTIC_MODEL, _ExplodingModel())
 
     core = Constitution(
         [Principle("P", "desc", priority=1, keywords=[], risk=50)],

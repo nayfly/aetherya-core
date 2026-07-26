@@ -62,13 +62,24 @@ python -m aetherya.audit_verify --audit-path audit/decisions.jsonl --require-cha
 ## Pipeline (simplified)
 
 ```
-Input → Parser → RateLimiter → ExecutionGate → CapabilityGate
-      → JailbreakGuard → ProceduralGuard → Constitution
+Input → Parser → IntentEscalation → RateLimiter → ExecutionGate
+      → CapabilityGate → JailbreakGuard → ProceduralGuard → Constitution
       → RiskAggregator → ConfirmationGate → PolicyEngine → Decision
       → Explainability → Audit
 ```
 
 Fail-closed: any exception in any stage → `allowed=false`.
+
+**IntentEscalation** decouples the guard chain from the parser: `ExecutionGate`
+and `CapabilityGate` only evaluate `operate` requests, so a command the parser
+did not recognise would otherwise skip them entirely. Escalation is monotone —
+it only ever tightens. See [docs/security-model.md](docs/security-model.md).
+
+**Determinism.** The keyword/guard/policy path is fully deterministic. The
+optional semantic layer is the one learned component, and it is deliberately
+non-authoritative: its risk is capped below every mode's `deny_at`, so it can
+escalate to a human but never deny on its own. It is also never allowed to block
+a decision on a cold model load — run `aetherya warmup` at startup to enable it.
 
 ---
 
