@@ -29,9 +29,67 @@ It does not call tools, orchestrate agents, or make network requests on your beh
 
 ---
 
+## Structured input (preferred)
+
+An agent runtime already knows which tool it is about to call and with what
+arguments. Pass that through directly instead of serializing it into a string
+for the parser to re-derive with regexes:
+
+```python
+from aetherya.actions import ActionRequest
+from aetherya.config import load_policy_config
+from aetherya.pipeline import run_pipeline_structured
+
+action = ActionRequest(
+    raw_input="write the rendered config",   # kept for the guards and the audit trail
+    intent="operate",                        # declared, not inferred
+    mode_hint="operative",
+    tool="filesystem",
+    target="/srv/App",
+    parameters={"path": "/srv/App/Config.TOML", "operation": "write"},
+)
+
+decision = run_pipeline_structured(
+    action,
+    constitution=constitution,
+    actor="deploy-bot",
+    cfg=load_policy_config("config/policy.yaml"),
+)
+```
+
+Over HTTP, send an `action` object instead of `raw_input`:
+
+```python
+status, payload = api.decide({
+    "action": {
+        "raw_input": "write the rendered config",
+        "intent": "operate",
+        "mode_hint": "operative",
+        "tool": "filesystem",
+        "target": "/srv/App",
+        "parameters": {"path": "/srv/App/Config.TOML", "operation": "write"},
+    },
+    "actor": "deploy-bot",
+})
+assert payload["meta"]["input_mode"] == "structured"
+```
+
+**Why this is preferred.** The parser infers `intent`, `tool`, `target` and
+parameters from free text; that inference is best-effort and its failures were
+the origin of the guard-chain coupling described in the security model. The
+structured path removes text classification from the trust path entirely.
+
+**What does not change.** Structured callers still pass the ABI contract, and
+IntentEscalation still runs — declaring `intent="ask"` on a destructive payload
+bypasses nothing, because the guards read `raw_input` regardless of the declared
+intent. Case is preserved end to end, so `/srv/App/Config.TOML` is audited
+exactly as given.
+
+---
+
 ## Minimum real integration
 
-The smallest correct integration using real project contracts:
+The free-text path, for callers that only have a string:
 
 ```python
 from pathlib import Path

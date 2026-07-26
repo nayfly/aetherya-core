@@ -25,7 +25,8 @@ This separation enables: deterministic decisions, configurable thresholds, snaps
 flowchart LR
     Input --> Parser
     Parser --> ActionContract
-    ActionContract --> Mode
+    ActionContract --> IntentEscalation
+    IntentEscalation --> Mode
     Mode --> RateLimiter
     RateLimiter --> ExecutionGate
     ExecutionGate --> CapabilityGate
@@ -50,15 +51,50 @@ flowchart LR
 Deterministic runtime order:
 
 1. Parse + ABI contracts (`actor`, `action`)
-2. Rate limiter (per-actor sliding-window — fail-closed if exceeded)
-3. Guard chain: `execution_gate` → `capability_gate` → `jailbreak_guard` → `procedural_guard`
-4. Constitution signal evaluation
-5. Risk aggregation + optional confirmation (token/context and optional signed proof)
-6. Policy state mapping and decision contract
-7. Explainability + shadow telemetry (`llm_shadow`, `policy_adapter_shadow`)
-8. Audit logging (`decision_id`, `context_hash`, chain/hash attestation)
+2. Intent escalation (`ask` → `operate` on executable command shape — monotone)
+3. Rate limiter (per-actor sliding-window — fail-closed if exceeded)
+4. Guard chain: `execution_gate` → `capability_gate` → `jailbreak_guard` → `procedural_guard`
+5. Constitution signal evaluation
+6. Risk aggregation + optional confirmation (token/context and optional signed proof)
+7. Policy state mapping and decision contract
+8. Explainability + shadow telemetry (`llm_shadow`, `policy_adapter_shadow`)
+9. Audit logging (`decision_id`, `context_hash`, chain/hash attestation)
 
 **Fail-closed guarantee:** any exception in any stage returns `fail_closed:<stage>` with `allowed=false`.
+
+### Why intent escalation exists
+
+`ExecutionGate` and `CapabilityGate` only evaluate requests whose intent is
+`operate`. That made the whole guard chain depend on the parser's verb list: an
+executable command using a verb the parser did not know — `dd if=/dev/zero
+of=/dev/sda` — was classified `ask`, skipped both gates, and could reach
+`allow`. The escalation stage re-derives operative intent from the raw input
+using command *shape* (command substitution, pipes into a shell, redirects to
+absolute paths, known binaries carrying flags, device operands, `sudo` prefixes)
+plus any `ProceduralGuard` hit.
+
+The transform is **monotone**: it only ever raises `ask`/`consultive` to
+`operate`/`operative`, never the reverse, so it cannot be used to relax a
+request the parser already classified as operative. When it fires, the audit
+context carries an `intent_escalation` block naming the signals that triggered it.
+
+### Determinism and the semantic layer
+
+The `SemanticEvaluator` is the only component in the decision path whose output
+depends on a learned model. Two properties keep the core verdict deterministic:
+
+- **Non-authoritative.** Its risk contribution is capped at
+  `constitution.semantic_max_risk` (default 60), validated at policy load to sit
+  strictly below every mode's `deny_at`. It can therefore raise a request to
+  `escalate` — never to `deny` or `hard_deny` — and it emits no hard-deny tags.
+  Swapping the model can change whether a human is asked, never whether an
+  action is refused outright.
+- **Never blocking.** Loading `all-MiniLM-L6-v2` costs ~5 s in a fresh process.
+  With `constitution.require_warm_semantic_model` (default `true`) the layer
+  declines to run when the model is not already in the process cache, and the
+  trace records `constitution.semantic_skipped: model_not_warm`. Long-lived
+  deployments call `aetherya warmup` at boot to make the layer available without
+  ever paying that cost inside a decision.
 
 ---
 

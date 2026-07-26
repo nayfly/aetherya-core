@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aetherya.actions import validate_action_request, validate_actor
+from aetherya.actions import ActionRequest, validate_action_request, validate_actor
 from aetherya.approval_proof import (
     approval_scope_hash,
     build_approval_proof,
@@ -21,8 +21,8 @@ from aetherya.cli import (
     _load_constitution,
     _maybe_read_last_event,
 )
-from aetherya.config import load_policy_config
-from aetherya.constitution import Constitution
+from aetherya.config import expected_policy_fingerprint, load_policy_config
+from aetherya.constitution import Constitution, is_model_warm
 from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
 
@@ -83,6 +83,38 @@ def _as_optional_str(value: Any, *, field_name: str) -> str | None:
         raise ValueError(f"{field_name} must be str")
     cleaned = value.strip()
     return cleaned if cleaned else None
+
+
+def _as_action_request(value: Any) -> ActionRequest:
+    """
+    Build an ActionRequest from an explicit `action` object.
+
+    This is the structured entry point: the caller declares intent, tool, target
+    and parameters instead of leaving them to be inferred from free text. Every
+    field is validated against the ABI contract before it reaches the pipeline.
+    """
+    body = _as_mapping(value, field_name="action")
+    raw_input = _as_non_empty_str(body.get("raw_input"), field_name="action.raw_input")
+    intent = _as_non_empty_str(body.get("intent"), field_name="action.intent")
+
+    raw_parameters = body.get("parameters", {})
+    if raw_parameters is None:
+        raw_parameters = {}
+    parameters = _as_mapping(raw_parameters, field_name="action.parameters")
+    for key in parameters:
+        if not isinstance(key, str):
+            raise ValueError("action.parameters keys must be str")
+
+    return validate_action_request(
+        ActionRequest(
+            raw_input=raw_input,
+            intent=intent,
+            mode_hint=_as_optional_str(body.get("mode_hint"), field_name="action.mode_hint"),
+            tool=_as_optional_str(body.get("tool"), field_name="action.tool"),
+            target=_as_optional_str(body.get("target"), field_name="action.target"),
+            parameters=dict(parameters),
+        )
+    )
 
 
 def _header_value(headers: dict[str, Any] | None, key: str) -> str:
@@ -162,6 +194,20 @@ class AetheryaAPI:
                 },
             )
 
+        pinned = expected_policy_fingerprint()
+        semantic_enabled = cfg.constitution_config.use_semantic
+        semantic_warm = is_model_warm()
+        # With `require_warm_semantic_model` the advisory layer silently declines
+        # to run until the model is loaded. Reporting that here is what keeps it
+        # from being a silent no-op in production: an operator can see whether the
+        # layer they configured is actually participating in decisions.
+        semantic_ready = (
+            (not semantic_enabled)
+            or semantic_warm
+            or (not cfg.constitution_config.require_warm_semantic_model)
+        )
+
+        degraded = semantic_enabled and not semantic_ready
         return (
             200,
             {
@@ -169,6 +215,12 @@ class AetheryaAPI:
                 "service": self.settings.service_name,
                 "policy_path": str(self.settings.policy_path),
                 "policy_fingerprint": cfg.policy_fingerprint,
+                "policy_fingerprint_pinned": pinned,
+                "policy_fingerprint_match": (pinned is None or pinned == cfg.policy_fingerprint),
+                "semantic_enabled": semantic_enabled,
+                "semantic_ready": semantic_ready,
+                "semantic_model_warm": semantic_warm,
+                "degraded": degraded,
                 "audit_path": str(self.settings.audit_path) if self.settings.audit_path else None,
                 "default_actor": self.settings.default_actor,
             },
@@ -177,7 +229,19 @@ class AetheryaAPI:
     def decide(self, payload: Any) -> tuple[int, dict[str, Any]]:
         try:
             body = _as_mapping(payload, field_name="decide payload")
-            raw_input = _as_non_empty_str(body.get("raw_input"), field_name="raw_input")
+
+            # Two input shapes. `action` is the structured, preferred one: the
+            # caller declares intent/tool/target/parameters, so no part of the
+            # decision depends on inferring structure from free text.
+            # `raw_input` keeps the free-text path for callers that only have text.
+            action: ActionRequest | None = None
+            raw_action = body.get("action")
+            if raw_action is not None:
+                action = _as_action_request(raw_action)
+                raw_input = action.raw_input
+            else:
+                raw_input = _as_non_empty_str(body.get("raw_input"), field_name="raw_input")
+
             actor = _as_non_empty_str(
                 body.get("actor", self.settings.default_actor),
                 field_name="actor",
@@ -205,6 +269,7 @@ class AetheryaAPI:
                 cfg=cfg_effective,
                 audit=audit,
                 response_text=candidate_response,
+                action=action,
             )
 
             event = _maybe_read_last_event(audit_path) if audit_path is not None else None
@@ -215,6 +280,7 @@ class AetheryaAPI:
                     "decision": decision.to_dict(),
                     "meta": {
                         "actor": actor,
+                        "input_mode": "structured" if action is not None else "raw_text",
                         "wait_shadow": wait_shadow,
                         "policy_path": str(self.settings.policy_path),
                         "constitution_path": (

@@ -13,7 +13,12 @@ The parser is **non-authoritative for security mode by design**: structured call
 Operative-content signals take unconditional priority over question framing:
 
 ```
-has_operative_content = tool_match OR operative_verb OR mode_hint=="operative"
+is_meta_question   = meta_frame AND no clause separator
+                     AND no tool_match AND mode_hint != "operative"
+
+has_operative_content = tool_match
+                     OR mode_hint == "operative"
+                     OR (operative_verb AND NOT is_meta_question)
 
 if has_operative_content:
     → intent=operate / mode=operative
@@ -26,8 +31,42 @@ This means:
 - `"Can you run rm -rf /tmp"` → `intent=operate / mode=operative` (contains operative verb `run`)
 - `"Delete the config file"` → `intent=operate / mode=operative` (operative verb `delete`)
 - `"What is the weather?"` → `intent=ask / mode=consultive` (no operative signals)
+- `"What does rm -rf do?"` → `intent=ask / mode=consultive` (meta-question, see below)
 
 The question heuristic **only applies** to inputs with no operative signals. It cannot downgrade the security mode of an operational request.
+
+---
+
+## Meta-Questions
+
+A meta-question asks *about* a command rather than requesting one. Treating a
+bare mention of an operative verb as an operation sent every such question to
+`escalate`, because an operative request with no declared `tool:` scores 55 at
+the ExecutionGate — above the operative `confirm_at` of 50.
+
+**Frames** (anchored at the start of the input, third person only):
+`what does/do/is/are …`, `how does … work`, `explain …`, `describe …`, `define …`
+
+**Disqualifiers** — any of these and the frame does not apply:
+
+| Disqualifier | Rationale | Example |
+|---|---|---|
+| Clause separator (`;`, `&&`, `\|`, newline, `and then`, `then`) | the input may chain an imperative after the frame | `explain; rm -rf /` |
+| `tool:<name>` present | an explicit declaration always wins | `what does tool:shell param.command=whoami do` |
+| `mode:operative` present | same | `what does mode:operative rm -rf do` |
+| First-person how-to | a request for instructions, not a meta question | `How do I run a Docker container?` |
+
+**This is an ergonomics fix, not a security boundary.** The frame can only relax
+inputs that carry no command shape and no destructive content, because two
+independent layers run afterwards on the raw input regardless of intent:
+
+- `ProceduralGuard` matches destructive commands independently of classification
+- `IntentEscalation` raises the request back to `operate` on any procedural hit
+  or command-shape signal
+
+So `"explain rm -rf /"` parses as `ask`, is escalated back to `operate`, and is
+hard-denied. Verified in `tests/test_intent_escalation.py`
+(`test_meta_question_frame_is_not_a_bypass`).
 
 ---
 

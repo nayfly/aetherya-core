@@ -1,0 +1,163 @@
+{
+  "version": "v1",
+  "kind": "procedural_evasions",
+  "description": "Systematic evasion attempts against the ProceduralGuard rule corpus. Every case must be refused (allowed=false). `expect_hard_deny` marks cases where the destructive intent is unambiguous from the text alone; the rest are only resolvable at execution time (variable expansion, pipe contents) and are expected to reach the confirmation band instead.",
+  "cases": [
+    {
+      "id": "evasion_quote_single_root_001",
+      "category": "shell_quoting",
+      "text": "rm -rf '/'",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_quote_double_root_002",
+      "category": "shell_quoting",
+      "text": "rm -rf \"/\"",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_quote_split_command_003",
+      "category": "shell_quoting",
+      "text": "r''m -rf /",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_quote_split_path_004",
+      "category": "shell_quoting",
+      "text": "rm -rf /e''tc",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_backslash_escape_005",
+      "category": "shell_quoting",
+      "text": "rm -rf /et\\c",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_tab_separated_006",
+      "category": "whitespace",
+      "text": "rm\t-rf\t/",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_multiple_spaces_007",
+      "category": "whitespace",
+      "text": "rm -r    -f    /",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_newline_separated_008",
+      "category": "whitespace",
+      "text": "echo hi\nrm -rf /",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_env_prefix_009",
+      "category": "command_prefix",
+      "text": "env rm -rf /",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_sudo_sh_c_010",
+      "category": "command_prefix",
+      "text": "sudo sh -c 'rm -rf /'",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_dotdot_path_011",
+      "category": "path_traversal",
+      "text": "rm -rf /var/../",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_unicode_homoglyph_012",
+      "category": "unicode",
+      "text": "rm -rf /еtc",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_dd_spaced_equals_013",
+      "category": "block_device",
+      "text": "dd if = /dev/zero of = /dev/sda",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_dd_quoted_device_014",
+      "category": "block_device",
+      "text": "dd if=/dev/zero of='/dev/sda'",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_truncate_device_015",
+      "category": "block_device",
+      "text": "truncate -s 0 /dev/sda",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_tee_device_016",
+      "category": "block_device",
+      "text": "echo x | tee /dev/sda",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_mkfs_long_option_017",
+      "category": "block_device",
+      "text": "mkfs --type ext4 /dev/sda1",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_python_rmtree_018",
+      "category": "interpreter",
+      "text": "python -c \"import shutil;shutil.rmtree('/')\"",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_find_delete_root_019",
+      "category": "indirect_delete",
+      "text": "find / -delete",
+      "expected": {"blocked": true, "hard_deny": true}
+    },
+    {
+      "id": "evasion_variable_command_020",
+      "category": "deferred_resolution",
+      "text": "CMD=rm; $CMD -rf /",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_variable_path_021",
+      "category": "deferred_resolution",
+      "text": "P=/; rm -rf $P",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_command_substitution_022",
+      "category": "deferred_resolution",
+      "text": "$(echo rm) -rf /",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_backtick_substitution_023",
+      "category": "deferred_resolution",
+      "text": "`echo rm` -rf /",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_base64_eval_024",
+      "category": "deferred_resolution",
+      "text": "echo cm0gLXJmIC8= | base64 -d | sh",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_relative_to_root_025",
+      "category": "deferred_resolution",
+      "text": "cd / && rm -rf .",
+      "expected": {"blocked": true, "hard_deny": false}
+    },
+    {
+      "id": "evasion_xargs_pipe_026",
+      "category": "deferred_resolution",
+      "text": "ls / | xargs rm -rf",
+      "expected": {"blocked": true, "hard_deny": false}
+    }
+  ]
+}

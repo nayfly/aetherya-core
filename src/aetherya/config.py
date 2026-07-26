@@ -1,11 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# Pin the policy a process is allowed to run. Deployments set this to the
+# fingerprint they intend to ship; a replica loading anything else refuses to
+# start rather than silently deciding under a different policy than its peers.
+POLICY_FINGERPRINT_ENV = "AETHERYA_EXPECTED_POLICY_FINGERPRINT"
+
+
+class PolicyFingerprintMismatch(ValueError):
+    """Raised when a loaded policy does not match the pinned fingerprint."""
+
+    def __init__(self, expected: str, actual: str | None) -> None:
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"policy fingerprint mismatch: expected {expected}, loaded {actual}. "
+            "Replicas running different policies produce divergent decisions for "
+            f"identical input; set {POLICY_FINGERPRINT_ENV} to the intended value "
+            "or deploy the matching policy file."
+        )
+
+
+def expected_policy_fingerprint(explicit: str | None = None) -> str | None:
+    """Resolve the pinned fingerprint from an explicit value or the environment."""
+    if explicit is not None:
+        cleaned = explicit.strip()
+        return cleaned or None
+    from_env = os.getenv(POLICY_FINGERPRINT_ENV, "").strip()
+    return from_env or None
 
 
 @dataclass(frozen=True)
@@ -148,11 +177,60 @@ class ConstitutionConfig:
       threshold) → gray zone with reduced risk score
 
     Defaults match the previously hardcoded values (0.55 / 0.35).
+
+    semantic_max_risk: ceiling on the risk the semantic layer may contribute.
+      Keeps the learned layer non-authoritative: it must stay strictly below
+      every mode's deny_at so semantic similarity can escalate to a human but
+      never deny on its own. Validated against the loaded modes.
     """
 
     use_semantic: bool = True
     semantic_violation_threshold: float = 0.55
     semantic_gray_zone_threshold: float = 0.35
+    semantic_max_risk: int = 60
+    require_warm_semantic_model: bool = True
+
+
+@dataclass(frozen=True)
+class RateLimitBackendConfig:
+    """
+    Rate limiter backend selection.
+
+    backend: "memory" (single process only) or "redis" (shared across workers).
+      With "memory" behind N workers the effective limit is N x requests_per_window,
+      so any multi-replica deployment must use "redis".
+
+    redis_url_env / redis_prefix: connection settings for the redis backend.
+    """
+
+    backend: str = "memory"
+    requests_per_window: int = 60
+    window_seconds: float = 60.0
+    max_actors: int = 10_000
+    redis_url_env: str = "AETHERYA_RATE_LIMIT_REDIS_URL"
+    redis_prefix: str = "aetherya:ratelimit"
+
+
+@dataclass(frozen=True)
+class IntentEscalationConfig:
+    """
+    Configuration for the IntentEscalation stage.
+
+    enabled: raise `ask`/`consultive` requests to `operate`/`operative` when the
+      raw input carries executable command shape. Without this, ExecutionGate and
+      the capability matrix depend on the parser's verb list to fire at all.
+
+    use_procedural_signal: treat any ProceduralGuard hit as operative evidence.
+    use_shape_signals: treat command substitution, pipes to shells, redirects to
+      absolute paths, known binaries with arguments, device operands and sudo
+      prefixes as operative evidence.
+
+    Escalation is monotone: it never downgrades an already-operative request.
+    """
+
+    enabled: bool = True
+    use_procedural_signal: bool = True
+    use_shape_signals: bool = True
 
 
 @dataclass(frozen=True)
@@ -169,6 +247,8 @@ class PolicyConfig:
     policy_fingerprint: str | None = None
     output_gate_config: OutputGateConfig = field(default_factory=OutputGateConfig)
     constitution_config: ConstitutionConfig = field(default_factory=ConstitutionConfig)
+    intent_escalation: IntentEscalationConfig = field(default_factory=IntentEscalationConfig)
+    rate_limit: RateLimitBackendConfig = field(default_factory=RateLimitBackendConfig)
 
 
 def _require(d: dict[str, Any], key: str) -> Any:
@@ -444,6 +524,8 @@ def _load_constitution_config(raw: dict[str, Any] | None) -> ConstitutionConfig:
     use_semantic = bool(data.get("use_semantic", True))
     violation_threshold = float(data.get("semantic_violation_threshold", 0.55))
     gray_zone_threshold = float(data.get("semantic_gray_zone_threshold", 0.35))
+    max_risk = int(data.get("semantic_max_risk", 60))
+    require_warm = bool(data.get("require_warm_semantic_model", True))
 
     if not (0.0 < violation_threshold <= 1.0):
         raise ValueError("constitution.semantic_violation_threshold must be in (0.0, 1.0]")
@@ -451,15 +533,88 @@ def _load_constitution_config(raw: dict[str, Any] | None) -> ConstitutionConfig:
         raise ValueError(
             "constitution.semantic_gray_zone_threshold must be in [0.0, violation_threshold)"
         )
+    if not (1 <= max_risk <= 100):
+        raise ValueError("constitution.semantic_max_risk must be in [1, 100]")
 
     return ConstitutionConfig(
         use_semantic=use_semantic,
         semantic_violation_threshold=violation_threshold,
         semantic_gray_zone_threshold=gray_zone_threshold,
+        semantic_max_risk=max_risk,
+        require_warm_semantic_model=require_warm,
     )
 
 
-def load_policy_config(path: str | Path) -> PolicyConfig:
+def _validate_semantic_authority(
+    constitution_config: ConstitutionConfig, modes: dict[str, ModeConfig]
+) -> None:
+    """
+    Enforce the non-authoritative contract of the semantic layer.
+
+    The learned layer must never be able to produce a deny on its own, so its
+    risk ceiling has to stay strictly below the deny threshold of every mode.
+    Checked at load time: a policy that violates this is rejected rather than
+    silently granting a model the authority to refuse actions.
+    """
+    if not constitution_config.use_semantic:
+        return
+    for mode_name, mode_cfg in modes.items():
+        deny_at = mode_cfg.thresholds.deny_at
+        if constitution_config.semantic_max_risk >= deny_at:
+            raise ValueError(
+                "constitution.semantic_max_risk "
+                f"({constitution_config.semantic_max_risk}) must be strictly below "
+                f"modes.{mode_name}.thresholds.deny_at ({deny_at}); the semantic "
+                "layer may only escalate, never deny"
+            )
+
+
+def _load_intent_escalation(raw: dict[str, Any] | None) -> IntentEscalationConfig:
+    data = raw or {}
+    return IntentEscalationConfig(
+        enabled=bool(data.get("enabled", True)),
+        use_procedural_signal=bool(data.get("use_procedural_signal", True)),
+        use_shape_signals=bool(data.get("use_shape_signals", True)),
+    )
+
+
+def _load_rate_limit(raw: dict[str, Any] | None) -> RateLimitBackendConfig:
+    data = raw or {}
+    backend = str(data.get("backend", "memory")).strip().lower()
+    if backend not in {"memory", "redis"}:
+        raise ValueError("rate_limit.backend must be one of: memory, redis")
+
+    requests_per_window = int(data.get("requests_per_window", 60))
+    window_seconds = float(data.get("window_seconds", 60.0))
+    if requests_per_window < 1:
+        raise ValueError("rate_limit.requests_per_window must be >= 1")
+    if window_seconds <= 0.0:
+        raise ValueError("rate_limit.window_seconds must be > 0")
+
+    return RateLimitBackendConfig(
+        backend=backend,
+        requests_per_window=requests_per_window,
+        window_seconds=window_seconds,
+        max_actors=int(data.get("max_actors", 10_000)),
+        redis_url_env=str(data.get("redis_url_env", "AETHERYA_RATE_LIMIT_REDIS_URL")).strip(),
+        redis_prefix=str(data.get("redis_prefix", "aetherya:ratelimit")).strip(),
+    )
+
+
+def load_policy_config(
+    path: str | Path,
+    expected_fingerprint: str | None = None,
+) -> PolicyConfig:
+    """
+    Load and validate a policy file.
+
+    If a fingerprint is pinned — via `expected_fingerprint` or the
+    `AETHERYA_EXPECTED_POLICY_FINGERPRINT` environment variable — the loaded
+    policy must match it or loading fails. This is what stops two replicas from
+    quietly running different policies and returning different decisions for the
+    same input: without it, a stale config on one node is invisible until
+    someone compares audit trails.
+    """
     path = Path(path)
     raw_text = path.read_text(encoding="utf-8")
     data = yaml.safe_load(raw_text)
@@ -497,6 +652,14 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
     policy_adapter_shadow = _load_policy_adapter_shadow(data.get("policy_adapter_shadow"))
     output_gate_config = _load_output_gate(data.get("output_gate"))
     constitution_config = _load_constitution_config(data.get("constitution"))
+    intent_escalation = _load_intent_escalation(data.get("intent_escalation"))
+    rate_limit = _load_rate_limit(data.get("rate_limit"))
+    _validate_semantic_authority(constitution_config, modes)
+
+    fingerprint = _policy_fingerprint(raw_text)
+    pinned = expected_policy_fingerprint(expected_fingerprint)
+    if pinned is not None and fingerprint != pinned:
+        raise PolicyFingerprintMismatch(pinned, fingerprint)
 
     return PolicyConfig(
         version=version,
@@ -508,7 +671,9 @@ def load_policy_config(path: str | Path) -> PolicyConfig:
         confirmation=confirmation,
         llm_shadow=llm_shadow,
         policy_adapter_shadow=policy_adapter_shadow,
-        policy_fingerprint=_policy_fingerprint(raw_text),
+        policy_fingerprint=fingerprint,
         output_gate_config=output_gate_config,
         constitution_config=constitution_config,
+        intent_escalation=intent_escalation,
+        rate_limit=rate_limit,
     )

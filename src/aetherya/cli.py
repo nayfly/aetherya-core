@@ -21,6 +21,7 @@ from aetherya.audit_verify import main as audit_verify_main
 from aetherya.chaos_benchmark import main as chaos_benchmark_main
 from aetherya.config import LLMShadowConfig, PolicyConfig, load_policy_config
 from aetherya.constitution import (
+    DEFAULT_SEMANTIC_MAX_RISK,
     DEFAULT_SEMANTIC_MODEL,
     Constitution,
     Principle,
@@ -40,6 +41,8 @@ def _default_constitution(
     semantic_violation_threshold: float = 0.55,
     semantic_gray_zone_threshold: float = 0.35,
     use_semantic: bool = True,
+    semantic_max_risk: int = DEFAULT_SEMANTIC_MAX_RISK,
+    require_warm_semantic_model: bool = True,
 ) -> Constitution:
     return Constitution(
         [
@@ -75,6 +78,8 @@ def _default_constitution(
         use_semantic=use_semantic,
         semantic_violation_threshold=semantic_violation_threshold,
         semantic_gray_zone_threshold=semantic_gray_zone_threshold,
+        semantic_max_risk=semantic_max_risk,
+        require_warm_semantic_model=require_warm_semantic_model,
     )
 
 
@@ -83,6 +88,8 @@ def _load_constitution(
     semantic_violation_threshold: float = 0.55,
     semantic_gray_zone_threshold: float = 0.35,
     use_semantic: bool = True,
+    semantic_max_risk: int = DEFAULT_SEMANTIC_MAX_RISK,
+    require_warm_semantic_model: bool = True,
 ) -> Constitution:
     if not path.exists():
         raise ValueError(f"constitution file not found: {path}")
@@ -129,6 +136,8 @@ def _load_constitution(
         use_semantic=use_semantic,
         semantic_violation_threshold=semantic_violation_threshold,
         semantic_gray_zone_threshold=semantic_gray_zone_threshold,
+        semantic_max_risk=semantic_max_risk,
+        require_warm_semantic_model=require_warm_semantic_model,
     )
 
 
@@ -194,12 +203,16 @@ def _cmd_decide(args: argparse.Namespace) -> int:
             semantic_violation_threshold=constitution_cfg.semantic_violation_threshold,
             semantic_gray_zone_threshold=constitution_cfg.semantic_gray_zone_threshold,
             use_semantic=constitution_cfg.use_semantic,
+            semantic_max_risk=constitution_cfg.semantic_max_risk,
+            require_warm_semantic_model=constitution_cfg.require_warm_semantic_model,
         )
         if constitution_path
         else _default_constitution(
             semantic_violation_threshold=constitution_cfg.semantic_violation_threshold,
             semantic_gray_zone_threshold=constitution_cfg.semantic_gray_zone_threshold,
             use_semantic=constitution_cfg.use_semantic,
+            semantic_max_risk=constitution_cfg.semantic_max_risk,
+            require_warm_semantic_model=constitution_cfg.require_warm_semantic_model,
         )
     )
 

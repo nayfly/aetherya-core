@@ -64,6 +64,15 @@ def _to_pipeline_result(evaluator_result: dict[str, Any]) -> dict[str, Any]:
 
 DEFAULT_SEMANTIC_MODEL = "all-MiniLM-L6-v2"
 
+# Ceiling on the risk the semantic layer may contribute. Must stay below the
+# lowest `deny_at` across modes (operative: 80) so the learned layer can only
+# ever escalate to a human, never deny on its own. See SemanticEvaluator.
+DEFAULT_SEMANTIC_MAX_RISK = 60
+
+# Tag attached to every semantic verdict so the audit trace shows when the
+# non-deterministic layer influenced a decision. Never a hard-deny tag.
+SEMANTIC_ADVISORY_TAG = "semantic_advisory"
+
 _MODEL_CACHE: dict[str, Any] = {}
 
 
@@ -73,6 +82,11 @@ def _default_model_factory(model_name: str) -> Any:
 
         _MODEL_CACHE[model_name] = SentenceTransformer(model_name)
     return _MODEL_CACHE[model_name]
+
+
+def is_model_warm(model_name: str = DEFAULT_SEMANTIC_MODEL) -> bool:
+    """True when the model is already in the process cache (no cold load needed)."""
+    return model_name in _MODEL_CACHE
 
 
 def warmup_semantic_model(
@@ -157,25 +171,19 @@ class FastKeywordEvaluator:
                 "tags": [],
             }
 
+        # No keyword evidence either way — the fast layer has nothing to say.
+        # Ambiguity is a statement about evidence, not about length: a long,
+        # carefully paraphrased input is exactly where keyword matching fails,
+        # so it must reach the semantic layer too. Text length only modulates
+        # how much confidence the fast layer reports in its own "clean" verdict.
         token_count = len(text.split())
-        if token_count < 10:
-            return {
-                "allowed": True,
-                "violated_principle": None,
-                "risk_score": 0,
-                "reason": "No violations detected",
-                "confidence": 0.5,
-                "ambiguous": True,
-                "tags": [],
-            }
-
         return {
             "allowed": True,
             "violated_principle": None,
             "risk_score": 0,
             "reason": "No violations detected",
-            "confidence": 0.8,
-            "ambiguous": False,
+            "confidence": 0.5 if token_count < 10 else 0.8,
+            "ambiguous": True,
             "tags": [],
         }
 
@@ -186,6 +194,19 @@ class FastKeywordEvaluator:
 
 
 class SemanticEvaluator:
+    """
+    Non-authoritative second layer.
+
+    The semantic layer is the only component in the decision path whose output
+    depends on a learned model, so it is deliberately kept unable to decide on
+    its own: its risk score is capped at `max_risk` (default 60), which sits
+    below the deny threshold of every shipped mode (operative 80, consultive
+    90). It can therefore raise a request to `escalate` — never to `deny` or
+    `hard_deny` — and it emits no hard-deny tags. Determinism of the *core*
+    verdict is preserved: a model change can alter whether a human is asked,
+    never whether an action is refused outright.
+    """
+
     def __init__(
         self,
         principles: list[Principle],
@@ -193,16 +214,41 @@ class SemanticEvaluator:
         model_factory: Callable[[str], Any] | None = None,
         violation_threshold: float = 0.55,
         gray_zone_threshold: float = 0.35,
+        max_risk: int = DEFAULT_SEMANTIC_MAX_RISK,
+        require_warm_model: bool = True,
     ) -> None:
         self._principles = principles
         self._model_name = model_name
         self._model_factory = model_factory or _default_model_factory
+        # An injected factory means the caller supplied a ready model, so the
+        # warm-model guard does not apply to it.
+        self._factory_is_injected = model_factory is not None
         self._model: Any = None
         self._ref_embeddings: Any = None
         self._ref_principle_indices: list[int] = []
         self._loaded: bool = False
         self._violation_threshold = violation_threshold
         self._gray_zone_threshold = gray_zone_threshold
+        self._max_risk = max_risk
+        self._require_warm_model = require_warm_model
+
+    def can_evaluate(self) -> bool:
+        """
+        Whether evaluating is free of a cold model load.
+
+        Loading `all-MiniLM-L6-v2` costs ~5 s in a fresh process. That belongs at
+        deployment startup (`aetherya warmup`), never inside a decision. When the
+        model is not warm the advisory layer declines to run rather than stalling
+        the decision path — the same reasoning that makes it non-authoritative in
+        the first place: an advisory signal must never be able to hold up a verdict.
+        """
+        if not self._require_warm_model:
+            return True
+        return self._loaded or self._factory_is_injected or is_model_warm(self._model_name)
+
+    def _advisory_risk(self, raw_risk: int) -> int:
+        """Clamp a principle's risk into the advisory band."""
+        return min(self._max_risk, max(1, raw_risk))
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -230,6 +276,7 @@ class SemanticEvaluator:
                 "ambiguous": False,
                 "tags": [],
                 "semantic_score": 0.0,
+                "semantic_model": self._model_name,
             }
 
         query_emb: Any = self._model.encode([text])[0]
@@ -249,24 +296,26 @@ class SemanticEvaluator:
             return {
                 "allowed": False,
                 "violated_principle": best_p.name,
-                "risk_score": min(100, max(1, best_p.risk)),
+                "risk_score": self._advisory_risk(best_p.risk),
                 "reason": f"Semantic violation detected: {best_p.name}",
                 "confidence": best_sim,
                 "ambiguous": False,
-                "tags": [],
+                "tags": [SEMANTIC_ADVISORY_TAG],
                 "semantic_score": best_sim,
+                "semantic_model": self._model_name,
             }
 
         if best_p is not None and best_sim > self._gray_zone_threshold:
             return {
                 "allowed": False,
                 "violated_principle": best_p.name,
-                "risk_score": min(100, max(1, int(best_p.risk * 0.6))),
+                "risk_score": self._advisory_risk(int(best_p.risk * 0.6)),
                 "reason": f"Semantic gray zone: {best_p.name}",
                 "confidence": best_sim,
                 "ambiguous": False,
-                "tags": [],
+                "tags": [SEMANTIC_ADVISORY_TAG],
                 "semantic_score": best_sim,
+                "semantic_model": self._model_name,
             }
 
         return {
@@ -278,6 +327,7 @@ class SemanticEvaluator:
             "ambiguous": False,
             "tags": [],
             "semantic_score": best_sim,
+            "semantic_model": self._model_name,
         }
 
 
@@ -294,6 +344,8 @@ class Constitution:
         use_semantic: bool = True,
         semantic_violation_threshold: float = 0.55,
         semantic_gray_zone_threshold: float = 0.35,
+        semantic_max_risk: int = DEFAULT_SEMANTIC_MAX_RISK,
+        require_warm_semantic_model: bool = True,
     ) -> None:
         self.principles = sorted(principles, key=lambda p: p.priority)
         self.audit = audit
@@ -303,6 +355,8 @@ class Constitution:
                 self.principles,
                 violation_threshold=semantic_violation_threshold,
                 gray_zone_threshold=semantic_gray_zone_threshold,
+                max_risk=semantic_max_risk,
+                require_warm_model=require_warm_semantic_model,
             )
             if use_semantic
             else None
@@ -321,6 +375,11 @@ class Constitution:
 
         if not fast["ambiguous"] or self._semantic_evaluator is None:
             result = _to_pipeline_result(fast)
+        elif not self._semantic_evaluator.can_evaluate():
+            # Model not warm: run `aetherya warmup` at startup to enable this layer.
+            # The decision proceeds on the deterministic result rather than paying a
+            # multi-second cold load inside the decision path.
+            result = _to_pipeline_result({**fast, "semantic_skipped": "model_not_warm"})
         else:
             try:
                 sem = self._semantic_evaluator.evaluate(text)
@@ -330,6 +389,7 @@ class Constitution:
                 degraded = {
                     **fast,
                     "confidence": max(0.0, float(fast.get("confidence", 0.5)) * 0.8),
+                    "semantic_skipped": "evaluator_error",
                 }
                 result = _to_pipeline_result(degraded)
 

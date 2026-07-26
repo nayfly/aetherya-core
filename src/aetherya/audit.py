@@ -7,7 +7,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 
 @dataclass
@@ -228,18 +228,54 @@ def verify_audit_event(
     )
 
 
+class AuditSink(Protocol):
+    """
+    Destination for audit events beyond the primary JSONL file.
+
+    A local file does not survive an ephemeral container and offers no
+    retention. Attach a mirror that ships each event to append-only storage
+    (S3 with object-lock, a WORM log service) so the chain outlives the process
+    that produced it. The mirror receives the exact serialized line the primary
+    wrote, so the chain hashes verify identically on either copy.
+    """
+
+    def write(self, event: AuditEvent, line: str) -> None: ...
+
+
 class AuditLogger:
+    """
+    Append-only JSONL audit log with chain integrity.
+
+    DURABILITY: `fsync=True` forces each event to disk before returning. Off by
+    default because it costs a syscall per decision; turn it on wherever losing
+    the last few events to a hard kill is unacceptable. Note that without it a
+    container killed mid-write can leave the on-disk chain shorter than what the
+    process believed it had written.
+
+    RETENTION: pass `mirrors` to fan out to append-only storage. Mirror failures
+    are counted in `mirror_errors` rather than raised, so a transient outage in
+    the archive does not take the decision path down — monitor that counter.
+    """
+
     def __init__(
         self,
         path: str = "./audit/decisions.jsonl",
         policy_fingerprint: str | None = None,
         attestation_key: str | None = None,
+        *,
+        fsync: bool = False,
+        mirrors: list[AuditSink] | None = None,
     ):
         self.path = Path(path)
         self.policy_fingerprint = _clean_policy_fingerprint(policy_fingerprint)
         self.attestation_key = _resolve_attestation_key(attestation_key)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._chain_tip = _load_chain_tip(self.path)
+        self.fsync = bool(fsync)
+        self.mirrors: list[AuditSink] = list(mirrors or [])
+        # Mirror failures must not break decisions, but a mirror that fails
+        # silently is worse than no mirror: monitor this counter.
+        self.mirror_errors = 0
 
     def set_policy_fingerprint(self, fingerprint: str | None) -> None:
         self.policy_fingerprint = _clean_policy_fingerprint(fingerprint)
@@ -298,7 +334,22 @@ class AuditLogger:
             decision=safe_decision,
             context=safe_context,
         )
+        line = json.dumps(asdict(ev), ensure_ascii=False)
         with self.path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(ev), ensure_ascii=False) + "\n")
+            f.write(line + "\n")
+            if self.fsync:
+                f.flush()
+                os.fsync(f.fileno())
+
+        # The chain tip only advances once the primary write succeeded — an
+        # exception above leaves the tip where it was, so the next event still
+        # chains onto the last durably recorded one.
         self._chain_tip = chain_hash
+
+        for mirror in self.mirrors:
+            try:
+                mirror.write(ev, line)
+            except Exception:
+                self.mirror_errors += 1
+
         return ev
