@@ -502,3 +502,92 @@ def test_cli_fingerprint_text_output(capsys: pytest.CaptureFixture[str]) -> None
     out = capsys.readouterr().out
     assert "effective_fingerprint" in out
     assert "policy_fingerprint" in out
+
+
+# ---------------------------------------------------------------------------
+# The HTTP API must actually apply the configured rate limit
+# ---------------------------------------------------------------------------
+
+
+def test_api_enforces_the_configured_rate_limit(tmp_path: Path) -> None:
+    """
+    Regression: `rate_limit` was validated on load and `build_rate_limiter`
+    worked, but nothing in the HTTP path ever constructed a limiter — the
+    configured limit was documentation, not behaviour.
+    """
+    data = yaml.safe_load(Path(_POLICY).read_text(encoding="utf-8"))
+    data["rate_limit"].update({"backend": "memory", "requests_per_window": 3})
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    api = AetheryaAPI(APISettings(policy_path=policy, audit_path=tmp_path / "a.jsonl"))
+    states = []
+    for _ in range(5):
+        _, body = api.decide({"raw_input": "help user", "actor": "chatty", "wait_shadow": False})
+        states.append(body["decision"]["allowed"])
+
+    assert states[:3] == [True, True, True]
+    assert states[3:] == [False, False]
+
+
+def test_the_limiter_is_built_once_and_reused(tmp_path: Path) -> None:
+    """Rebuilding per request would reset every window and make it a no-op."""
+    api = AetheryaAPI(APISettings(audit_path=tmp_path / "a.jsonl"))
+    cfg = load_policy_config(_POLICY)
+
+    first = api._resolve_rate_limiter(cfg)  # noqa: SLF001
+    assert api._resolve_rate_limiter(cfg) is first  # noqa: SLF001
+
+
+def test_the_limiter_is_rebuilt_when_the_policy_changes(tmp_path: Path) -> None:
+    api = AetheryaAPI(APISettings(audit_path=tmp_path / "a.jsonl"))
+    cfg = load_policy_config(_POLICY)
+    first = api._resolve_rate_limiter(cfg)  # noqa: SLF001
+
+    changed = replace(cfg, rate_limit=replace(cfg.rate_limit, requests_per_window=7))
+    assert api._resolve_rate_limiter(changed) is not first  # noqa: SLF001
+
+
+def test_a_config_without_a_rate_limit_section_disables_limiting(tmp_path: Path) -> None:
+    class _Cfg:
+        pass
+
+    api = AetheryaAPI(APISettings(audit_path=tmp_path / "a.jsonl"))
+    assert api._resolve_rate_limiter(_Cfg()) is None  # noqa: SLF001
+
+
+def test_the_pipeline_accepts_any_limiter_backend() -> None:
+    """
+    The signature said `ActorRateLimiter`, so the Redis backend could not be
+    passed to the pipeline at all — mypy caught it once the API wired it up.
+    """
+    import inspect
+
+    from aetherya.pipeline import run_pipeline
+
+    annotation = inspect.signature(run_pipeline).parameters["rate_limiter"].annotation
+    assert "RateLimiter" in str(annotation)
+    assert "ActorRateLimiter" not in str(annotation)
+
+
+def test_the_deployment_policy_differs_only_in_the_rate_limit_backend() -> None:
+    """
+    `config/policy.docker.yaml` exists so the container gets the distributed
+    limiter while the repo default keeps working with no infrastructure. Two
+    policy files is a drift hazard, so the difference is pinned to exactly one
+    field — anything else changing in one and not the other fails here.
+    """
+    from dataclasses import asdict
+
+    repo = load_policy_config(_POLICY)
+    docker = load_policy_config("config/policy.docker.yaml")
+
+    assert repo.rate_limit.backend == "memory"
+    assert docker.rate_limit.backend == "redis"
+
+    ignored = {"policy_fingerprint", "effective_fingerprint", "rate_limit"}
+    repo_fields = {k: v for k, v in asdict(repo).items() if k not in ignored}
+    docker_fields = {k: v for k, v in asdict(docker).items() if k not in ignored}
+    assert repo_fields == docker_fields
+
+    assert replace(repo.rate_limit, backend="redis") == docker.rate_limit

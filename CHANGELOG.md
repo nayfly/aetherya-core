@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed (found while containerising)
+
+- **The HTTP API never applied the configured rate limit.** `rate_limit` was validated at load and `build_rate_limiter()` had 13 integration tests, but nothing in the API path ever constructed a limiter — the configured limit was documentation, not behaviour. `AetheryaAPI` now builds one per process (rebuilt only when the policy's rate-limit section changes; rebuilding per request would reset every window and make it a no-op) and passes it to the pipeline. Verified end to end through the container: 65 requests from one actor against a limit of 60 yielded 60 allowed and 5 refused, with the window visible in Redis.
+- `run_pipeline` typed `rate_limiter` as `ActorRateLimiter`, so the Redis backend could not be passed to it at all. Widened to the `RateLimiter` protocol — mypy caught this the moment the API tried to wire it up.
+
+### Added (containerised local stack)
+
+- `Dockerfile` — two-stage build, non-root user, the semantic model baked in at build time (with `require_warm_semantic_model`, downloading it on first boot would either delay readiness or leave the advisory layer silently inactive). Healthcheck asserts `ok && !degraded && policy_fingerprint_match`, so a replica serving under an unintended policy or with the advisory layer inert is not marked healthy.
+- `docker-compose.yml` — decision service plus Redis, with the audit chain on a named volume so it survives the container. Verified: chain intact across a restart (9 events, 0 invalid). The approvals service is deliberately absent — it is localhost-only by design and belongs to phase 3, not phase 1.
+- `config/policy.docker.yaml` — deployment policy, identical to `config/policy.yaml` except for the distributed rate-limit backend. The repo default stays `memory` because `redis` fails closed and would refuse every request without a reachable server. A test pins the two files to differ in exactly that one field so they cannot drift.
+
 ### Added (rollout)
 
 - `docs/rollout-phases.md` — the three-phase production rollout as an executable plan: shadow, hard-deny enforcement, full enforcement. Each phase states its posture, the wiring change it needs, what to measure, and **exit criteria that can fail**, including what to do when shadow mode reports an unacceptable false-positive rate. Also documents the target operating configuration and the `/health` readiness gate.

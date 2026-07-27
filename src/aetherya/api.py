@@ -26,6 +26,7 @@ from aetherya.config import expected_policy_fingerprint, load_policy_config
 from aetherya.constitution import Constitution, is_model_warm
 from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
+from aetherya.rate_limiter import RateLimitConfig, RateLimiter, build_rate_limiter
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,42 @@ def _header_value(headers: dict[str, Any] | None, key: str) -> str:
 class AetheryaAPI:
     def __init__(self, settings: APISettings | None = None):
         self.settings = settings or APISettings()
+        # Built once and reused: the in-process backend keeps its windows on the
+        # instance, so rebuilding per request would reset every limit and make
+        # the limiter a no-op. Rebuilt only if the policy's rate-limit section
+        # changes underneath us.
+        self._rate_limiter: RateLimiter | None = None
+        self._rate_limiter_key: tuple[Any, ...] | None = None
+
+    def _resolve_rate_limiter(self, cfg: Any) -> RateLimiter | None:
+        rl = getattr(cfg, "rate_limit", None)
+        if rl is None:
+            return None
+
+        key = (
+            rl.backend,
+            rl.requests_per_window,
+            rl.window_seconds,
+            rl.max_actors,
+            rl.redis_url_env,
+            rl.redis_prefix,
+        )
+        if self._rate_limiter is not None and self._rate_limiter_key == key:
+            return self._rate_limiter
+
+        limiter = build_rate_limiter(
+            rl.backend,
+            RateLimitConfig(
+                requests_per_window=rl.requests_per_window,
+                window_seconds=rl.window_seconds,
+                max_actors=rl.max_actors,
+            ),
+            redis_url_env=rl.redis_url_env,
+            redis_prefix=rl.redis_prefix,
+        )
+        self._rate_limiter = limiter
+        self._rate_limiter_key = key
+        return limiter
 
     def _resolve_constitution(self) -> Constitution:
         path = self.settings.constitution_path
@@ -276,6 +313,7 @@ class AetheryaAPI:
                 audit=audit,
                 response_text=candidate_response,
                 action=action,
+                rate_limiter=self._resolve_rate_limiter(cfg_effective),
             )
 
             event = _maybe_read_last_event(audit_path) if audit_path is not None else None

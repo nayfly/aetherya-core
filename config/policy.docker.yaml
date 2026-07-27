@@ -1,0 +1,209 @@
+# Deployment policy: identical to config/policy.yaml except that the rate
+# limiter uses the distributed backend. Mounted by docker-compose.yml.
+#
+# The repo default stays `memory` so the CLI and a bare `aetherya-api` work
+# with no infrastructure. `redis` fails closed, so pointing at it without a
+# reachable server refuses every request — correct, but not a default.
+#
+# tests/test_deployment_contracts.py asserts these two files differ in
+# exactly this one field, so they cannot drift apart.
+version: 1
+
+modes:
+  consultive:
+    default_state: log_only
+    thresholds:
+      deny_at: 90
+      confirm_at: 60
+      log_only_at: 0
+
+  operative:
+    default_state: allow
+    thresholds:
+      deny_at: 80
+      confirm_at: 50
+      log_only_at: 0
+
+aggregator:
+  weights:
+    execution_gate: 1.0
+    capability_gate: 1.0
+    jailbreak_guard: 1.0
+    procedural_guard: 1.0
+    constitution: 1.0
+  hard_deny_if:
+    - critical_tag_detected
+    - "tag:jailbreak_attempt"
+    - "tag:tool_not_allowed"
+    - "tag:capability_tool_denied"
+
+procedural_guard:
+  # Each entry activates a rule family in procedural_guard.py. The legacy
+  # literals ("rm -rf /", "mkfs", ":(){:|:&};:") now expand to flag-order
+  # tolerant, device-anchored patterns instead of naive substring matching.
+  # Symbolic keys activate families that have no single literal form. An
+  # unrecognised entry degrades to literal substring matching, so custom
+  # operator rules keep working unchanged.
+  critical_tags:
+    - "rm -rf /"                # root recursive delete: -rf, -fr, -r -f, --no-preserve-root
+    - "mkfs"                    # filesystem format — requires a /dev/ argument
+    - ":(){:|:&};:"             # classic fork bomb
+    - "block_device_write"      # dd of=/dev/sdX, > /dev/sdX, shred|wipefs|tee|truncate /dev/X
+    - "interpreter_destruction" # shutil.rmtree('/') inside a python -c one-liner
+    - "find_delete"             # find / ... -delete
+    - "recursive_force_delete"  # rm -rf on a non-root path (risk 55, not hard-deny)
+    - "remote_code_execution"   # curl|wget piped into a shell (risk 70)
+  privileged_ops:
+    - "apt remove"
+    - "apt purge"
+    - "userdel"
+    - "chmod -R 777 /"
+
+execution_gate:
+  enabled: true
+  allowed_tools:
+    - shell
+    - http
+    - filesystem
+  require_target_for_operate: false
+  required_parameters:
+    shell:
+      - command
+  allowed_parameters:
+    shell:
+      - command
+      - timeout
+    http:
+      - method
+      - url
+      - body
+    filesystem:
+      - path
+      - operation
+      - confirm_token
+      - confirm_context
+
+capability_matrix:
+  enabled: true
+  default_allow: false
+  roles:
+    operator:
+      tools:
+        - shell
+        - http
+        - filesystem
+      operations:
+        - read
+        - write
+        - append
+        - list
+        - request
+        - command
+  actors:
+    robert:
+      roles:
+        - operator
+      tools: []
+      operations: []
+
+confirmation:
+  enabled: true
+  on_confirmed: allow
+  require_for:
+    decisions:
+      - require_confirm
+    tools: []
+    operations:
+      - delete
+      - write
+    min_risk_score: 0
+  evidence:
+    token_param: confirm_token
+    context_param: confirm_context
+    token_pattern: "^ack:[a-z0-9_-]{8,}$"
+    min_context_length: 12
+    signed_proof:
+      enabled: false
+      proof_param: confirm_proof
+      key_env: AETHERYA_CONFIRMATION_HMAC_KEY
+      keyring_env: AETHERYA_CONFIRMATION_HMAC_KEYRING
+      active_kid: k1
+      max_valid_for_sec: 900
+      clock_skew_sec: 5
+      replay_mode: single_use
+      replay_store: memory
+      replay_redis_url_env: AETHERYA_CONFIRMATION_REPLAY_REDIS_URL
+      replay_redis_prefix: aetherya:appr
+
+# LLM shadow — non-authoritative ethical evaluation, never affects the decision.
+# provider: dry_run | openai | anthropic
+#   openai    requires OPENAI_API_KEY    (e.g. model: gpt-4o-mini)
+#   anthropic requires ANTHROPIC_API_KEY (e.g. model: claude-opus-4-8) and
+#             `pip install -e ".[anthropic]"`. Note: temperature is ignored by
+#             the anthropic provider (current Claude models reject sampling params).
+llm_shadow:
+  enabled: false
+  provider: dry_run
+  model: gpt-dry
+  temperature: 0.0
+  max_tokens: 96
+  timeout_sec: 10.0
+
+policy_adapter_shadow:
+  enabled: false
+  max_signals: 3
+
+# Rate limiting. The "memory" backend keeps windows in process memory, so behind
+# N workers the effective limit is N x requests_per_window — the configured limit
+# is simply not the limit that applies. Any multi-worker or multi-replica
+# deployment must use "redis". The redis backend fails closed: if Redis is
+# unreachable the request is refused rather than silently going unlimited.
+rate_limit:
+  backend: redis               # memory | redis
+  requests_per_window: 60
+  window_seconds: 60.0
+  max_actors: 10000            # memory backend only: LRU cap against actor-id flooding
+  redis_url_env: AETHERYA_RATE_LIMIT_REDIS_URL
+  redis_prefix: "aetherya:ratelimit"
+
+# Intent escalation — decouples the guard chain from the parser's verb list.
+# ExecutionGate and the capability matrix only evaluate `operate` requests, so
+# without this stage a command the parser does not recognise (e.g.
+# `dd if=/dev/zero of=/dev/sda`) skips both gates and can reach `allow`.
+# Escalation is monotone: it only ever raises ask/consultive -> operate/operative.
+intent_escalation:
+  enabled: true
+  use_procedural_signal: true   # any ProceduralGuard hit implies operative content
+  use_shape_signals: true       # $(...), pipe-to-shell, > /path, binary+flags, sudo X
+
+# OutputGate contract configuration.
+# require_candidate_response: false (default) means OutputGate is opt-in —
+# the caller chooses whether to pass candidate_response to run_pipeline.
+# Set to true in deployments where output protection must always be enforced.
+output_gate:
+  require_candidate_response: false
+
+# Constitution evaluator configuration.
+# use_semantic: activate the SemanticEvaluator (all-MiniLM-L6-v2) for inputs that
+#   Fast keyword matching cannot resolve definitively. Enabled by default.
+# Thresholds govern the SemanticEvaluator similarity cutoffs.
+# Modify with care: lowering thresholds increases sensitivity and false-positive risk.
+constitution:
+  use_semantic: true
+  semantic_violation_threshold: 0.55
+  semantic_gray_zone_threshold: 0.35
+  # NON-AUTHORITATIVE CONTRACT: the semantic layer is the only learned component
+  # in the decision path. Its risk contribution is capped here so it can raise a
+  # request to `escalate` (a human decides) but never to `deny` on its own.
+  # Must stay strictly below every mode's deny_at — validated at policy load.
+  # This is what keeps the *core verdict* deterministic: swapping the model can
+  # change whether a human is asked, never whether an action is refused.
+  semantic_max_risk: 60
+  # Loading all-MiniLM-L6-v2 costs ~5s in a fresh process. That belongs at
+  # deployment startup (`aetherya warmup`), never inside a decision. With this
+  # set, the advisory layer declines to run when the model is not already in the
+  # process cache instead of stalling the decision path; the trace then carries
+  # `constitution.semantic_skipped: model_not_warm`. Long-lived servers should
+  # call `aetherya warmup` at boot so the layer is always available.
+  # Set to false only if you accept a multi-second cold load inside a decision.
+  require_warm_semantic_model: true

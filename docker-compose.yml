@@ -1,0 +1,71 @@
+# Local phase-1 stack: the decision service plus the Redis it needs for shared
+# state. See docs/rollout-phases.md.
+#
+#   docker compose up --build
+#   curl -s localhost:8080/health | python -m json.tool
+#   open http://localhost:8080
+#
+# This runs the decision profile only. The approvals service is deliberately
+# absent: it signs approval proofs, is localhost-only by design, and belongs on
+# a separate trust boundary — phase 3, not phase 1.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: aetherya-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  aetherya:
+    build: .
+    container_name: aetherya-decision
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Shared rate-limit state. With the in-process backend, N replicas mean
+      # N x the configured limit — see docs/security-model.md.
+      AETHERYA_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
+      AETHERYA_CONFIRMATION_REPLAY_REDIS_URL: redis://redis:6379/1
+
+      # Signs the audit chain. Replace before this is anything but a local demo:
+      # without a real secret the attestation proves the file is self-consistent,
+      # not that this service produced it.
+      AETHERYA_ATTESTATION_KEY: "local-dev-attestation-key-replace-me"
+
+      # Pin the policy so a replica refuses to start under an unintended one.
+      # Get the value with: aetherya policy fingerprint --json
+      # Left unset locally so the stack comes up before you have run that.
+      # AETHERYA_EXPECTED_POLICY_FINGERPRINT: "sha256:..."
+
+    volumes:
+      # The audit chain must survive the container. Without this, every restart
+      # begins a new chain and the old one is gone.
+      - audit-data:/app/audit
+      # Edit config/policy.yaml on the host and restart to apply.
+      - ./config:/app/config:ro
+    command:
+      - aetherya-api
+      - --host=0.0.0.0
+      - --port=8080
+      # Deployment policy: same as config/policy.yaml with the
+      # distributed rate-limit backend.
+      - --policy-path=config/policy.docker.yaml
+      - --audit-path=audit/decisions.jsonl
+      - --require-semantic-ready
+
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  audit-data:
