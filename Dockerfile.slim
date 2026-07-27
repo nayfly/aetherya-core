@@ -1,0 +1,70 @@
+# ÆTHERYA decision service — slim variant (~200MB instead of ~8.7GB).
+#
+# The size of the full image is not ÆTHERYA: it is PyTorch, pulled in by
+# sentence-transformers for the semantic layer. That layer is advisory by
+# design — capped below every deny threshold, so it can escalate to a human
+# but never refuse on its own. The deterministic core (parser, guards,
+# procedural corpus, jailbreak, capabilities, risk, confirmation, audit) does
+# not use it at all.
+#
+# So this variant drops the dependency and runs with `use_semantic: false`.
+# Everything that hard-denies today still hard-denies: those verdicts come
+# from the procedural and jailbreak corpora, not from similarity. What you
+# lose is paraphrase detection on inputs no keyword matches.
+#
+# Recommended for phase 1: what you are measuring there is deterministic
+# refusals, and this starts in seconds instead of ~15s.
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY pyproject.toml README.md ./
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir -U pip \
+    && pip install --no-cache-dir --no-deps ".[redis]" \
+    && pip install --no-cache-dir "pyyaml" "numpy>=1.26.0" "redis>=5.0.0"
+
+
+FROM python:3.11-slim AS runtime
+
+# Never run the decision boundary as root.
+RUN useradd --create-home --uid 10001 aetherya
+
+COPY --from=builder /opt/venv /opt/venv
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /app
+COPY --chown=aetherya:aetherya config/ ./config/
+COPY --chown=aetherya:aetherya examples/ ./examples/
+
+# The audit trail is a chained JSONL file; it must outlive the container.
+# docker-compose mounts a volume here.
+RUN mkdir -p /app/audit && chown aetherya:aetherya /app/audit
+VOLUME ["/app/audit"]
+
+USER aetherya
+EXPOSE 8080
+
+# `degraded` and `policy_fingerprint_match` are the fields that matter: a replica
+# serving with the advisory layer inactive, or under an unintended policy, should
+# not receive traffic.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import json,urllib.request;\
+d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=4));\
+raise SystemExit(0 if d.get('ok') and not d.get('degraded') and d.get('policy_fingerprint_match') else 1)"
+
+# --require-semantic-ready: fail startup rather than serve in a degraded state.
+CMD ["aetherya-api", \
+     "--host", "0.0.0.0", \
+     "--port", "8080", \
+     "--policy-path", "config/policy.slim.yaml", \
+     "--audit-path", "audit/decisions.jsonl", \
+     "--no-warmup-semantic"]

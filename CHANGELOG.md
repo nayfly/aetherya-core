@@ -4,6 +4,34 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added (phase-1 sidecar)
+
+- `enforcement.py` + `enforcement.phase` in policy — the rollout posture is now configuration. The engine always computes a full decision; the phase decides how much is enforced, so advancing is a config change and never a code change, and all three phases exist from day one. `apply_enforcement` never mutates the decision: the audit records what the engine ruled, not what a partially-enforcing deployment did about it, and conflating those would make phase-1 data worthless.
+- `client.py` — `AetheryaClient`, a dependency-free HTTP client for the sidecar shape (agent in one process, engine in another). Fails **closed** from phase 2 on: an unreachable service refuses the action, because a boundary that disappears when the network hiccups is not a boundary. Phase 1 is the explicit exception — it enforces nothing, so an outage must not stop the agent.
+- `rollout_report.py` + `aetherya rollout report` — measures a phase against its exit criteria from the audit trail: window size, decisions by state, what the next phase would act on, distinct actors and tools per state, intent escalations, skipped semantics, policy-fingerprint uniformity, chain integrity, and the `hard_deny` events that require manual review. The `hard_deny_reviewed` criterion **never auto-passes**: the tool can count and list those events, it cannot judge them, and auto-passing would turn the phase gate into the formality it exists to prevent. Exits non-zero until ready, so it works as a promotion gate.
+- `examples/sidecar_agent.py` — the same agent trajectory as `agent_loop.py`, but over HTTP against the container, with the shadow gap counted per run.
+- `Dockerfile.slim` + `config/policy.slim.yaml` — **8.7GB → 330MB**. The size was never ÆTHERYA; it was PyTorch, pulled in by sentence-transformers for the advisory layer. That layer is capped below every deny threshold, so it can escalate to a human but never refuse alone, and the deterministic core does not use it. Verified: the slim image hard-denies exactly what the full one does, including the quote-split evasion `r''m -rf /`, and reports healthy in 8s instead of ~25s. A test pins the two policies to differ in that one field.
+
+### Fixed
+
+- `rollout report` crashed on a malformed audit line or an empty file, because `verify_audit_file` raises rather than returning. Both are findings an operator must see before advancing a phase — they are now reported as a failed `chain_intact` criterion with the detail, instead of taking the tool down or being silently skipped.
+
+### Fixed (CI)
+
+- `examples/agent_loop.py`: the OpenAI backend checked for the SDK before checking for the API key, so the error you got depended on whether `openai` happened to be installed. It is present in a dev environment and absent from CI's `[dev]` extra, which is exactly why `test_openai_backend_requires_a_key` passed locally and failed CI on the last two pushes. The key is now checked first — a missing key is the more common misconfiguration, and you should not need the SDK installed to be told about it — and both paths have tests, one of which blocks the import to prove it.
+- `security_gate` phase 2 generates its own corpus but `AuditLogger` appends by design, so a file left by a previous local run was appended to and counted. The phase then failed on events it had not created, reporting `invalid == total`, which reads like a real integrity regression. CI never saw it (fresh checkout) but a second local run always did. The phase now starts from a clean file and is idempotent, with a test asserting two consecutive runs both pass.
+
+### Fixed (found while containerising)
+
+- **The HTTP API never applied the configured rate limit.** `rate_limit` was validated at load and `build_rate_limiter()` had 13 integration tests, but nothing in the API path ever constructed a limiter — the configured limit was documentation, not behaviour. `AetheryaAPI` now builds one per process (rebuilt only when the policy's rate-limit section changes; rebuilding per request would reset every window and make it a no-op) and passes it to the pipeline. Verified end to end through the container: 65 requests from one actor against a limit of 60 yielded 60 allowed and 5 refused, with the window visible in Redis.
+- `run_pipeline` typed `rate_limiter` as `ActorRateLimiter`, so the Redis backend could not be passed to it at all. Widened to the `RateLimiter` protocol — mypy caught this the moment the API tried to wire it up.
+
+### Added (containerised local stack)
+
+- `Dockerfile` — two-stage build, non-root user, the semantic model baked in at build time (with `require_warm_semantic_model`, downloading it on first boot would either delay readiness or leave the advisory layer silently inactive). Healthcheck asserts `ok && !degraded && policy_fingerprint_match`, so a replica serving under an unintended policy or with the advisory layer inert is not marked healthy.
+- `docker-compose.yml` — decision service plus Redis, with the audit chain on a named volume so it survives the container. Verified: chain intact across a restart (9 events, 0 invalid). The approvals service is deliberately absent — it is localhost-only by design and belongs to phase 3, not phase 1.
+- `config/policy.docker.yaml` — deployment policy, identical to `config/policy.yaml` except for the distributed rate-limit backend. The repo default stays `memory` because `redis` fails closed and would refuse every request without a reachable server. A test pins the two files to differ in exactly that one field so they cannot drift.
+
 ### Added (rollout)
 
 - `docs/rollout-phases.md` — the three-phase production rollout as an executable plan: shadow, hard-deny enforcement, full enforcement. Each phase states its posture, the wiring change it needs, what to measure, and **exit criteria that can fail**, including what to do when shadow mode reports an unacceptable false-positive rate. Also documents the target operating configuration and the `/health` readiness gate.

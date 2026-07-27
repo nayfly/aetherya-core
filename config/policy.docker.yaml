@@ -1,3 +1,12 @@
+# Deployment policy: identical to config/policy.yaml except that the rate
+# limiter uses the distributed backend. Mounted by docker-compose.yml.
+#
+# The repo default stays `memory` so the CLI and a bare `aetherya-api` work
+# with no infrastructure. `redis` fails closed, so pointing at it without a
+# reachable server refuses every request — correct, but not a default.
+#
+# tests/test_deployment_contracts.py asserts these two files differ in
+# exactly this one field, so they cannot drift apart.
 version: 1
 
 modes:
@@ -150,7 +159,7 @@ policy_adapter_shadow:
 # deployment must use "redis". The redis backend fails closed: if Redis is
 # unreachable the request is refused rather than silently going unlimited.
 rate_limit:
-  backend: memory              # memory | redis
+  backend: redis               # memory | redis
   requests_per_window: 60
   window_seconds: 60.0
   max_actors: 10000            # memory backend only: LRU cap against actor-id flooding

@@ -1,3 +1,11 @@
+# Slim deployment policy: identical to config/policy.docker.yaml with the
+# advisory semantic layer disabled, so the image does not need PyTorch.
+#
+# The layer is advisory by construction — capped below every deny threshold,
+# it can escalate to a human but never refuse alone. Disabling it removes
+# paraphrase detection and changes nothing about what is hard-denied.
+#
+# tests/test_deployment_contracts.py pins the difference to this one field.
 version: 1
 
 modes:
@@ -150,7 +158,7 @@ policy_adapter_shadow:
 # deployment must use "redis". The redis backend fails closed: if Redis is
 # unreachable the request is refused rather than silently going unlimited.
 rate_limit:
-  backend: memory              # memory | redis
+  backend: redis               # memory | redis
   requests_per_window: 60
   window_seconds: 60.0
   max_actors: 10000            # memory backend only: LRU cap against actor-id flooding
@@ -190,7 +198,7 @@ output_gate:
 # Thresholds govern the SemanticEvaluator similarity cutoffs.
 # Modify with care: lowering thresholds increases sensitivity and false-positive risk.
 constitution:
-  use_semantic: true
+  use_semantic: false
   semantic_violation_threshold: 0.55
   semantic_gray_zone_threshold: 0.35
   # NON-AUTHORITATIVE CONTRACT: the semantic layer is the only learned component

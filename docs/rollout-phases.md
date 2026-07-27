@@ -8,8 +8,30 @@ that decision is enforced**. Nothing about the policy, the integration or the
 audit trail changes between phases — only the enforcement posture. That is what
 makes it safe to start in observation mode and tighten later.
 
-Run `python examples/agent_loop.py --phase N` to see each posture against a real
-agent loop.
+The phase is configuration, not code:
+
+```yaml
+# config/policy.yaml
+enforcement:
+  phase: 1        # 1 shadow · 2 hard_deny · 3 full
+```
+
+Two ways to see it:
+
+```bash
+python examples/agent_loop.py --phase 1     # engine in-process
+python examples/sidecar_agent.py --phase 1  # agent talking to the container
+```
+
+And one way to know when to advance:
+
+```bash
+aetherya rollout report --phase 1 --audit-path audit/decisions.jsonl
+```
+
+That command evaluates the exit criteria below against the audit trail, prints
+the `hard_deny` events that need human review, and exits non-zero until the
+phase is ready — usable as a gate in a promotion pipeline.
 
 | Phase | Blocks | Confirms | Risk of deploying it |
 |---|---|---|---|

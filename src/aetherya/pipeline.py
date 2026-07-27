@@ -47,7 +47,7 @@ from aetherya.policy_decision_adapter import (
 )
 from aetherya.policy_engine import DecisionState, PolicyEngine
 from aetherya.procedural_guard import ProceduralGuard
-from aetherya.rate_limiter import ActorRateLimiter
+from aetherya.rate_limiter import RateLimiter
 from aetherya.risk import RiskAggregator, RiskDecision, RiskSignal
 
 
@@ -286,7 +286,7 @@ def run_pipeline(
     cfg: PolicyConfig,
     audit: AuditLogger | None = None,
     response_text: str | None = None,
-    rate_limiter: ActorRateLimiter | None = None,
+    rate_limiter: RateLimiter | None = None,
     action: ActionRequest | None = None,
 ) -> Decision:
     """
@@ -957,7 +957,7 @@ def run_pipeline_structured(
     cfg: PolicyConfig,
     audit: AuditLogger | None = None,
     response_text: str | None = None,
-    rate_limiter: ActorRateLimiter | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> Decision:
     """
     Preferred entry point for programmatic integrations.

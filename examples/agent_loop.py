@@ -300,12 +300,18 @@ class OpenAIAgent:
     )
 
     def __init__(self, model: str = "gpt-4o-mini") -> None:
-        try:
-            from openai import OpenAI
-        except ImportError as exc:  # pragma: no cover - optional path
-            raise SystemExit("pip install openai, or use --agent scripted") from exc
+        # Key first: a missing key is the more common misconfiguration, and you
+        # should not need the SDK installed to be told about it. (Checking the
+        # import first also made this branch depend on whether `openai` happened
+        # to be present, which is exactly how it passed locally and failed CI.)
         if not os.getenv("OPENAI_API_KEY", "").strip():
             raise SystemExit("OPENAI_API_KEY is not set — use --agent scripted")
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise SystemExit(
+                'openai is not installed — pip install -e ".[llm]", or use --agent scripted'
+            ) from exc
         self._client = OpenAI()
         self._model = model
         self._messages: list[dict[str, Any]] = [

@@ -32,6 +32,7 @@ from aetherya.explainability_report import main as explainability_report_main
 from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
 from aetherya.pipeline_benchmark import main as pipeline_benchmark_main
+from aetherya.rollout_report import main as rollout_report_main
 from aetherya.security_baseline import main as security_baseline_main
 from aetherya.security_gate import main as security_gate_main
 from aetherya.verify_release_artifacts import main as verify_release_artifacts_main
@@ -487,6 +488,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     warmup_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     warmup_parser.set_defaults(handler=_cmd_warmup)
+
+    rollout_parser = subparsers.add_parser("rollout", help="Rollout phase tooling.")
+    rollout_subparsers = rollout_parser.add_subparsers(dest="rollout_command")
+    rollout_subparsers.required = True
+    _add_forward_command(
+        rollout_subparsers,
+        name="report",
+        help_text="Measure the current rollout phase against its exit criteria.",
+        target_main=rollout_report_main,
+    )
 
     policy_parser = subparsers.add_parser("policy", help="Policy inspection tooling.")
     policy_subparsers = policy_parser.add_subparsers(dest="policy_command")
