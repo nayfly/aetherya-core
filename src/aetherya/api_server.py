@@ -1,358 +1,23 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from aetherya.api import AetheryaAPI, APISettings
 from aetherya.config import load_policy_config
+from aetherya.console import console_html
 from aetherya.constitution import warmup_semantic_model
 
 
 class RequestTooLargeError(ValueError):
     pass
-
-
-def _dashboard_html() -> str:
-    return """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AETHERYA API Dashboard</title>
-  <style>
-    :root {
-      --bg-a: #f8fbff;
-      --bg-b: #eef7f2;
-      --panel: #ffffff;
-      --ink: #122029;
-      --muted: #53636d;
-      --line: #d8e2e8;
-      --accent: #0d8c77;
-      --accent-strong: #0a705f;
-      --danger: #bb1f3a;
-      --shadow: 0 10px 30px rgba(17, 45, 58, 0.08);
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      color: var(--ink);
-      font-family: "Trebuchet MS", "Gill Sans", "Segoe UI", sans-serif;
-      background: radial-gradient(circle at 15% 10%, var(--bg-b), var(--bg-a) 60%);
-      min-height: 100vh;
-    }
-    .wrap {
-      max-width: 1040px;
-      margin: 0 auto;
-      padding: 28px 18px 36px;
-    }
-    .hero {
-      background: linear-gradient(135deg, #0d8c77, #207a9f);
-      color: #f7ffff;
-      border-radius: 16px;
-      padding: 18px 20px;
-      box-shadow: var(--shadow);
-      margin-bottom: 18px;
-    }
-    .hero h1 {
-      margin: 0 0 6px;
-      font-size: 1.4rem;
-      letter-spacing: 0.2px;
-    }
-    .hero p {
-      margin: 0;
-      opacity: 0.95;
-      font-size: 0.96rem;
-    }
-    .grid {
-      display: grid;
-      gap: 14px;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 14px;
-      box-shadow: var(--shadow);
-    }
-    .panel h2 {
-      margin: 0 0 10px;
-      font-size: 1rem;
-    }
-    label {
-      display: block;
-      margin: 8px 0 4px;
-      color: var(--muted);
-      font-size: 0.88rem;
-      font-weight: 700;
-      letter-spacing: 0.2px;
-      text-transform: uppercase;
-    }
-    input, textarea {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #fbfdff;
-      color: var(--ink);
-      font: inherit;
-      padding: 9px 10px;
-    }
-    textarea {
-      min-height: 90px;
-      resize: vertical;
-    }
-    .row {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      margin-top: 10px;
-      flex-wrap: wrap;
-    }
-    .check {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.9rem;
-      color: var(--muted);
-      text-transform: none;
-      margin: 0;
-      font-weight: 600;
-    }
-    .check input { width: auto; }
-    button {
-      border: 0;
-      border-radius: 10px;
-      background: var(--accent);
-      color: #fff;
-      padding: 9px 13px;
-      font: inherit;
-      font-weight: 700;
-      cursor: pointer;
-      transition: transform 120ms ease, background 120ms ease;
-    }
-    button:hover { background: var(--accent-strong); transform: translateY(-1px); }
-    button:active { transform: translateY(0); }
-    pre {
-      margin: 0;
-      background: #0f1c24;
-      color: #d8eaf3;
-      border-radius: 12px;
-      border: 1px solid #1f3441;
-      padding: 12px;
-      min-height: 220px;
-      overflow: auto;
-      font-size: 0.84rem;
-      line-height: 1.4;
-    }
-    .status {
-      margin-left: auto;
-      font-size: 0.84rem;
-      color: var(--muted);
-      font-weight: 700;
-    }
-    .status.err { color: var(--danger); }
-    .hint {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 0.84rem;
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <section class="hero">
-      <h1>AETHERYA API Dashboard</h1>
-      <p>Interactive panel for health checks, policy decisions, signed approvals, and audit-chain verification.</p>
-    </section>
-
-    <section class="grid">
-      <article class="panel">
-        <h2>Health</h2>
-        <div class="row">
-          <button id="btn-health" type="button">GET /health</button>
-          <span class="status" id="health-status">idle</span>
-        </div>
-        <p class="hint">Quick runtime check: policy, fingerprint and defaults.</p>
-      </article>
-
-      <article class="panel">
-        <h2>Decide</h2>
-        <label for="decide-raw">raw_input</label>
-        <textarea id="decide-raw">help user safely</textarea>
-        <label for="decide-actor">actor</label>
-        <input id="decide-actor" type="text" value="robert">
-        <label for="decide-response">candidate_response (optional)</label>
-        <textarea id="decide-response" placeholder="Generated user-facing answer to validate with OutputGate"></textarea>
-        <div class="row">
-          <label class="check"><input id="decide-wait-shadow" type="checkbox" checked>wait_shadow</label>
-          <button id="btn-decide" type="button">POST /v1/decide</button>
-          <span class="status" id="decide-status">idle</span>
-        </div>
-      </article>
-
-      <article class="panel">
-        <h2>Confirmation Sign (Admin)</h2>
-        <label for="sign-raw">raw_input</label>
-        <textarea id="sign-raw">mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator</textarea>
-        <label for="sign-actor">actor</label>
-        <input id="sign-actor" type="text" value="robert">
-        <label for="sign-ttl">expires_in_sec (optional)</label>
-        <input id="sign-ttl" type="text" value="60">
-        <label for="sign-admin">x-aetherya-admin-key</label>
-        <input id="sign-admin" type="password" placeholder="admin key for human-only signing">
-        <div class="row">
-          <button id="btn-sign" type="button">POST /v1/confirmation/sign</button>
-          <span class="status" id="sign-status">idle</span>
-        </div>
-      </article>
-
-      <article class="panel">
-        <h2>Confirmation Verify (Admin)</h2>
-        <label for="verify-proof-raw">raw_input</label>
-        <textarea id="verify-proof-raw">mode:operative tool:filesystem target:/tmp param.path=/tmp/a param.operation=write param.confirm_token=ack:abc12345 param.confirm_context=approved_by_operator</textarea>
-        <label for="verify-proof-actor">actor</label>
-        <input id="verify-proof-actor" type="text" value="robert">
-        <label for="verify-proof-value">approval_proof</label>
-        <input id="verify-proof-value" type="text" placeholder="ap1.kid.exp.nonce.scope_hash.sig">
-        <label for="verify-admin">x-aetherya-admin-key</label>
-        <input id="verify-admin" type="password" placeholder="admin key for human-only verify">
-        <div class="row">
-          <button id="btn-proof-verify" type="button">POST /v1/confirmation/verify</button>
-          <span class="status" id="proof-verify-status">idle</span>
-        </div>
-      </article>
-
-      <article class="panel">
-        <h2>Audit Verify</h2>
-        <div class="row">
-          <label class="check"><input id="verify-chain" type="checkbox" checked>require_chain</label>
-          <label class="check"><input id="verify-hmac" type="checkbox">require_hmac</label>
-        </div>
-        <label for="verify-index">event_index (optional)</label>
-        <input id="verify-index" type="text" placeholder="-1">
-        <div class="row">
-          <button id="btn-verify" type="button">POST /v1/audit/verify</button>
-          <span class="status" id="verify-status">idle</span>
-        </div>
-      </article>
-    </section>
-
-    <section class="panel" style="margin-top:14px;">
-      <h2>Response</h2>
-      <pre id="response-view">{\n  "ok": true,\n  "message": "Ready"\n}</pre>
-    </section>
-  </div>
-
-  <script>
-    const view = document.getElementById("response-view");
-    const setStatus = (id, text, isErr = false) => {
-      const el = document.getElementById(id);
-      el.textContent = text;
-      el.classList.toggle("err", isErr);
-    };
-    const render = (data) => {
-      view.textContent = JSON.stringify(data, null, 2);
-    };
-    const request = async (statusId, url, body = null, extraHeaders = null) => {
-      setStatus(statusId, "loading...", false);
-      try {
-        const opts = body === null ? {} : {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(extraHeaders || {}),
-          },
-          body: JSON.stringify(body),
-        };
-        const res = await fetch(url, opts);
-        const data = await res.json();
-        render({ http_status: res.status, ...data });
-        setStatus(statusId, `HTTP ${res.status}`, !res.ok);
-        return { res, data };
-      } catch (err) {
-        render({ ok: false, error_type: "NetworkError", error: String(err) });
-        setStatus(statusId, "network error", true);
-        return null;
-      }
-    };
-
-    document.getElementById("btn-health").addEventListener("click", () => {
-      request("health-status", "/health", null);
-    });
-
-    document.getElementById("btn-decide").addEventListener("click", () => {
-      const candidateResponse = document.getElementById("decide-response").value.trim();
-      const payload = {
-        raw_input: document.getElementById("decide-raw").value,
-        actor: document.getElementById("decide-actor").value,
-        wait_shadow: document.getElementById("decide-wait-shadow").checked,
-      };
-      if (candidateResponse) {
-        payload.candidate_response = candidateResponse;
-      }
-      request("decide-status", "/v1/decide", {
-        ...payload,
-      });
-    });
-
-    document.getElementById("btn-sign").addEventListener("click", async () => {
-      const ttlRaw = document.getElementById("sign-ttl").value.trim();
-      const adminKey = document.getElementById("sign-admin").value.trim();
-      const payload = {
-        raw_input: document.getElementById("sign-raw").value,
-        actor: document.getElementById("sign-actor").value,
-      };
-      if (ttlRaw) {
-        const ttl = Number(ttlRaw);
-        payload.expires_in_sec = Number.isInteger(ttl) ? ttl : ttlRaw;
-      }
-      const result = await request(
-        "sign-status",
-        "/v1/confirmation/sign",
-        payload,
-        adminKey ? { "X-AETHERYA-Admin-Key": adminKey } : {}
-      );
-      if (result && result.data && result.data.approval_proof) {
-        document.getElementById("verify-proof-value").value = result.data.approval_proof;
-      }
-    });
-
-    document.getElementById("btn-proof-verify").addEventListener("click", () => {
-      const adminKey = document.getElementById("verify-admin").value.trim();
-      const payload = {
-        raw_input: document.getElementById("verify-proof-raw").value,
-        actor: document.getElementById("verify-proof-actor").value,
-        approval_proof: document.getElementById("verify-proof-value").value,
-      };
-      request(
-        "proof-verify-status",
-        "/v1/confirmation/verify",
-        payload,
-        adminKey ? { "X-AETHERYA-Admin-Key": adminKey } : {}
-      );
-    });
-
-    document.getElementById("btn-verify").addEventListener("click", () => {
-      const rawIndex = document.getElementById("verify-index").value.trim();
-      const payload = {
-        require_chain: document.getElementById("verify-chain").checked,
-        require_hmac: document.getElementById("verify-hmac").checked,
-      };
-      if (rawIndex) {
-        const n = Number(rawIndex);
-        payload.event_index = Number.isInteger(n) ? n : rawIndex;
-      }
-      request("verify-status", "/v1/audit/verify", payload);
-    });
-  </script>
-</body>
-</html>
-"""
 
 
 class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -408,11 +73,42 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("request body must be a JSON object")
         return payload
 
+    def _query(self) -> dict[str, Any]:
+        raw = parse_qs(urlsplit(self.path).query)
+        return {key: values[0] for key, values in raw.items() if values}
+
     def _handle_request(self) -> None:
         method = self.command.upper()
         path = urlsplit(self.path).path
-        if method == "GET" and path in {"/", "/dashboard"}:
-            self._send_html(200, _dashboard_html())
+        if method == "GET" and path in {"/", "/console", "/dashboard"}:
+            self._send_html(200, console_html())
+            return
+
+        # Read-only console data. Gated behind AETHERYA_CONSOLE_API_KEY when it
+        # is set; open otherwise, like the rest of the decision profile. This
+        # view exposes every recorded action, so the port must not be public.
+        if method == "GET" and path in {"/v1/decisions", "/v1/rollout/report"}:
+            if self.api is None:
+                self._send_json(500, {"ok": False, "error": "api not configured"})
+                return
+            expected = os.getenv("AETHERYA_CONSOLE_API_KEY", "").strip()
+            if expected:
+                provided = self.headers.get("X-AETHERYA-Console-Key", "").strip()
+                if not provided or not hmac.compare_digest(provided, expected):
+                    self._send_json(
+                        401,
+                        {
+                            "ok": False,
+                            "error_type": "Unauthorized",
+                            "error": "missing or invalid console key",
+                        },
+                    )
+                    return
+            query = self._query()
+            status, body = (
+                self.api.decisions(query) if path == "/v1/decisions" else self.api.rollout(query)
+            )
+            self._send_json(status, body)
             return
 
         payload: dict[str, Any] = {}

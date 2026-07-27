@@ -13,7 +13,6 @@ from aetherya.api_server import (
     AetheryaHTTPRequestHandler,
     RequestTooLargeError,
     _build_handler,
-    _dashboard_html,
     build_server,
     main,
     serve_api,
@@ -70,16 +69,6 @@ def test_handler_send_json_writes_status_headers_and_body() -> None:
     assert ("Content-Type", "text/html; charset=utf-8") in fake_html.headers
     assert fake_html.ended is True
     assert fake_html.wfile.getvalue().decode("utf-8") == "<h1>x</h1>"
-
-
-def test_dashboard_template_contains_controls() -> None:
-    html = _dashboard_html()
-    assert "AETHERYA API Dashboard" in html
-    assert "/v1/decide" in html
-    assert "/v1/audit/verify" in html
-    assert "/v1/confirmation/sign" in html
-    assert "/v1/confirmation/verify" in html
-    assert "candidate_response" in html
 
 
 def test_handler_parse_json_body_branches() -> None:
@@ -163,7 +152,7 @@ def test_handler_handle_request_branches(tmp_path: Path) -> None:
     dashboard = FakeHandler(method="GET", path="/")
     AetheryaHTTPRequestHandler._handle_request(dashboard)  # noqa: SLF001
     assert dashboard.sent_html[0][0] == 200
-    assert "AETHERYA API Dashboard" in dashboard.sent_html[0][1]
+    assert "Operator Console" in dashboard.sent_html[0][1]
 
     get_ok = FakeHandler(method="GET", path="/health")
     AetheryaHTTPRequestHandler._handle_request(get_ok)  # noqa: SLF001

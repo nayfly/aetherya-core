@@ -331,3 +331,43 @@ def test_json_output_is_machine_readable(
     payload: dict[str, Any] = json.loads(capsys.readouterr().out)
     assert payload["window"]["total_decisions"] == 2
     assert isinstance(payload["criteria"], list)
+
+
+def test_timestamps_that_are_not_strings_are_ignored(tmp_path: Path) -> None:
+    path = tmp_path / "decisions.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "actor": "a",
+                "action": "x",
+                "ts": 12345,
+                "decision": {"allowed": True, "risk_score": 0, "reason": "ok", "state": "allow"},
+                "context": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert build_report(path).first_event is None
+
+
+def test_text_output_without_timestamps_omits_the_range(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "decisions.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "actor": "a",
+                "action": "x",
+                "decision": {"allowed": True, "risk_score": 0, "reason": "ok", "state": "allow"},
+                "context": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    main(["--audit-path", str(path)])
+    out = capsys.readouterr().out
+    assert "window" in out
+    assert "  ->  " not in out

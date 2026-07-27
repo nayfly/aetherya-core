@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,7 @@ from aetherya.constitution import Constitution, is_model_warm
 from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
 from aetherya.rate_limiter import RateLimitConfig, RateLimiter, build_rate_limiter
+from aetherya.rollout_report import DEFAULT_MIN_DAYS, DEFAULT_MIN_DECISIONS, build_report
 
 
 @dataclass(frozen=True)
@@ -352,6 +354,90 @@ class AetheryaAPI:
         except Exception as exc:
             return (
                 500,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def decisions(self, params: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        """
+        Recent decisions from the audit trail, newest first.
+
+        Read-only view for the operator console. Reads the tail of the file
+        rather than holding an index: at console volumes that is simpler and
+        cannot drift from the authoritative record, which is the file itself.
+        """
+        try:
+            query = params or {}
+            if self.settings.audit_path is None:
+                raise ValueError("audit_path is disabled in API settings")
+
+            limit = max(1, min(int(query.get("limit", 100) or 100), 1000))
+            state_filter = _as_optional_str(query.get("state"), field_name="state")
+
+            events: list[dict[str, Any]] = []
+            path = self.settings.audit_path
+            lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+            for raw in reversed(lines):
+                if len(events) >= limit:
+                    break
+                if not raw.strip():
+                    continue
+                try:
+                    event = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                decision = event.get("decision") or {}
+                state = str(decision.get("state", "unknown"))
+                if state_filter and state != state_filter:
+                    continue
+                context = event.get("context") or {}
+                action_ctx = context.get("action") if isinstance(context, dict) else {}
+                events.append(
+                    {
+                        "ts": event.get("ts"),
+                        "actor": event.get("actor"),
+                        "action": str(event.get("action", ""))[:400],
+                        "state": state,
+                        "allowed": decision.get("allowed"),
+                        "risk_score": decision.get("risk_score"),
+                        "reason": decision.get("reason"),
+                        "violated_principle": decision.get("violated_principle"),
+                        "tool": (action_ctx.get("tool") if isinstance(action_ctx, dict) else None),
+                        "escalated": bool(
+                            isinstance(context, dict) and context.get("intent_escalation")
+                        ),
+                        "decision_id": event.get("decision_id"),
+                    }
+                )
+
+            return (200, {"ok": True, "count": len(events), "decisions": events})
+        except Exception as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def rollout(self, params: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        """Phase measurement for the console — same data as `aetherya rollout report`."""
+        try:
+            query = params or {}
+            if self.settings.audit_path is None:
+                raise ValueError("audit_path is disabled in API settings")
+
+            cfg = load_policy_config(self.settings.policy_path)
+            phase = int(query.get("phase") or cfg.enforcement.phase)
+            report = build_report(
+                self.settings.audit_path,
+                current_phase=phase,
+                min_decisions=int(query.get("min_decisions", DEFAULT_MIN_DECISIONS) or 0)
+                or DEFAULT_MIN_DECISIONS,
+                min_days=float(query.get("min_days", DEFAULT_MIN_DAYS) or 0) or DEFAULT_MIN_DAYS,
+            )
+            return (200, {"ok": True, "report": report.to_dict()})
+        except Exception as exc:
+            return (
+                400,
                 {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
             )
 

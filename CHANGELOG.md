@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added (operator console)
+
+- `console.py` — an operator console replacing the API dashboard at `/`. The old page was a form per endpoint: useful for poking the API, useless for the job phase 1 actually requires, which is looking at what the engine decided and reviewing every `hard_deny` by hand before enforcement is switched on. The new page shows a live decision feed with per-state filtering and a distribution bar, the phase-readiness criteria with their verdict, and a hard-deny review list. Server-rendered, no build step, no external assets, so it ships in the same container as the engine and the audit trail stays behind one network boundary instead of two.
+- `GET /v1/decisions?limit=&state=` and `GET /v1/rollout/report?phase=` — read-only views over the audit trail backing the console. Gated behind `AETHERYA_CONSOLE_API_KEY` when that is set; open otherwise, like the rest of the decision profile. **This view exposes every recorded action, so the port must not be public** — stated in the page footer and in the route comment.
+- Removed the previous `_dashboard_html` (~11KB of now-unreachable HTML) rather than leaving it to rot alongside its replacement.
+
 ### Added (phase-1 sidecar)
 
 - `enforcement.py` + `enforcement.phase` in policy — the rollout posture is now configuration. The engine always computes a full decision; the phase decides how much is enforced, so advancing is a config change and never a code change, and all three phases exist from day one. `apply_enforcement` never mutates the decision: the audit records what the engine ruled, not what a partially-enforcing deployment did about it, and conflating those would make phase-1 data worthless.
