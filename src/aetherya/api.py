@@ -14,6 +14,7 @@ from aetherya.approval_proof import (
     verify_approval_proof,
 )
 from aetherya.audit import AuditLogger
+from aetherya.audit_sink import mirror_health
 from aetherya.audit_verify import _build_report, verify_audit_file
 from aetherya.cli import (
     _default_constitution,
@@ -214,15 +215,20 @@ class AetheryaAPI:
                 "ok": True,
                 "service": self.settings.service_name,
                 "policy_path": str(self.settings.policy_path),
+                # `policy_fingerprint` is the file's bytes (provenance);
+                # `effective_fingerprint` is the behavioural identity and is what
+                # the pin is checked against.
                 "policy_fingerprint": cfg.policy_fingerprint,
+                "effective_fingerprint": cfg.effective_fingerprint,
                 "policy_fingerprint_pinned": pinned,
-                "policy_fingerprint_match": (pinned is None or pinned == cfg.policy_fingerprint),
+                "policy_fingerprint_match": (pinned is None or pinned == cfg.effective_fingerprint),
                 "semantic_enabled": semantic_enabled,
                 "semantic_ready": semantic_ready,
                 "semantic_model_warm": semantic_warm,
                 "degraded": degraded,
                 "audit_path": str(self.settings.audit_path) if self.settings.audit_path else None,
                 "default_actor": self.settings.default_actor,
+                **mirror_health(),
             },
         )
 

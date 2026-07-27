@@ -52,6 +52,7 @@ See a runnable simulation: [`examples/agent_integration.py`](../examples/agent_i
 | File | What it covers |
 |------|----------------|
 | [integrations.md](./integrations.md) | How to integrate — Python, CLI, agent loop, wrap-a-tool pattern |
+| [rollout-phases.md](./rollout-phases.md) | Shadow → hard-deny → full enforcement, with exit criteria per phase |
 | [architecture.md](./architecture.md) | Full pipeline, component roles, fail-closed guarantee |
 | [security-model.md](./security-model.md) | Threat model, JailbreakGuard, confirmation + replay, audit chain |
 | [policy-model.md](./policy-model.md) | Modes, Constitution, semantic thresholds, policy.yaml structure |

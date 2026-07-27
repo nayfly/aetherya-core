@@ -7,6 +7,46 @@ on:
   pull_request:
 
 jobs:
+  redis_integration:
+    name: Redis integration (real server)
+    runs-on: ubuntu-latest
+
+    # The unit suite uses an in-memory double, which cannot demonstrate
+    # MULTI/EXEC semantics, serialization between concurrent clients, real TTL
+    # behaviour, or that separate limiter instances share state. Those are the
+    # properties that make the distributed limiter correct, so they are checked
+    # against a real server.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev,redis]"
+
+      - name: Redis Rate Limiter Integration Suite
+        env:
+          AETHERYA_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: |
+          pytest tests/integration -m integration -v --no-cov
+
   test:
     runs-on: ubuntu-latest
 
