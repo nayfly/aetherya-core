@@ -308,3 +308,29 @@ def test_main_text_mode_exercises_non_json_output(
 
     assert code == 0
     assert "security_gate passed=True" in captured.out
+
+
+def test_phase2_is_idempotent_across_runs(tmp_path: Path) -> None:
+    """
+    AuditLogger appends by design, so a corpus file left by a previous run was
+    appended to and counted: the phase then failed on events it had not created,
+    reporting invalid == total, which reads like a real integrity regression.
+    CI never hits it (fresh checkout); a second local run always did.
+    """
+    from aetherya.security_gate import _phase_integrity_fuzz
+
+    kwargs = {
+        "attestation_key": "test-key",
+        "workdir": tmp_path,
+        "events": 40,
+        "seed": 1337,
+        "mutation_rounds": 4,
+        "expected_reject_code": 1,
+    }
+
+    first = _phase_integrity_fuzz(**kwargs)  # type: ignore[arg-type]
+    second = _phase_integrity_fuzz(**kwargs)  # type: ignore[arg-type]
+
+    assert first.passed is True
+    assert second.passed is True
+    assert second.details["total"] == first.details["total"] == 40

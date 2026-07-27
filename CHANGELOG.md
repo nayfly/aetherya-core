@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed (CI)
+
+- `examples/agent_loop.py`: the OpenAI backend checked for the SDK before checking for the API key, so the error you got depended on whether `openai` happened to be installed. It is present in a dev environment and absent from CI's `[dev]` extra, which is exactly why `test_openai_backend_requires_a_key` passed locally and failed CI on the last two pushes. The key is now checked first — a missing key is the more common misconfiguration, and you should not need the SDK installed to be told about it — and both paths have tests, one of which blocks the import to prove it.
+- `security_gate` phase 2 generates its own corpus but `AuditLogger` appends by design, so a file left by a previous local run was appended to and counted. The phase then failed on events it had not created, reporting `invalid == total`, which reads like a real integrity regression. CI never saw it (fresh checkout) but a second local run always did. The phase now starts from a clean file and is idempotent, with a test asserting two consecutive runs both pass.
+
 ### Fixed (found while containerising)
 
 - **The HTTP API never applied the configured rate limit.** `rate_limit` was validated at load and `build_rate_limiter()` had 13 integration tests, but nothing in the API path ever constructed a limiter — the configured limit was documentation, not behaviour. `AetheryaAPI` now builds one per process (rebuilt only when the policy's rate-limit section changes; rebuilding per request would reset every window and make it a no-op) and passes it to the pipeline. Verified end to end through the container: 65 requests from one actor against a limit of 60 yielded 60 allowed and 5 refused, with the window visible in Redis.

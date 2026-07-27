@@ -153,6 +153,29 @@ def test_example_policy_is_loadable_and_knows_the_demo_actor(agent_loop: Any) ->
 
 
 def test_openai_backend_requires_a_key(monkeypatch: pytest.MonkeyPatch, agent_loop: Any) -> None:
+    """
+    Must hold whether or not the SDK is installed. Checking the import first
+    made this assertion depend on the environment: it passed locally, where
+    `openai` was present, and failed CI, where the `dev` extra does not pull it.
+    """
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(SystemExit, match="OPENAI_API_KEY"):
+        agent_loop.OpenAIAgent()
+
+
+def test_openai_backend_reports_a_missing_sdk(
+    monkeypatch: pytest.MonkeyPatch, agent_loop: Any
+) -> None:
+    import builtins
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    real_import = builtins.__import__
+
+    def _blocked(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "openai" or name.startswith("openai."):
+            raise ImportError("No module named 'openai'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+    with pytest.raises(SystemExit, match="openai is not installed"):
         agent_loop.OpenAIAgent()

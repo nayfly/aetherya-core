@@ -271,6 +271,13 @@ def _phase_integrity_fuzz(
     expected_reject_code: int,
 ) -> SecurityGatePhase:
     audit_path = workdir / "phase2_tamper_audit.jsonl"
+    # AuditLogger appends, by design — the chain must never be truncated in
+    # normal operation. This phase generates its own corpus, so a file left by a
+    # previous run would be appended to and counted, and the phase would fail on
+    # events it did not create. CI never sees it (fresh checkout); a second local
+    # run does, with a confusing "invalid == total" that suggests a real
+    # regression. Start from a clean file.
+    audit_path.unlink(missing_ok=True)
     logger = AuditLogger(str(audit_path), attestation_key=attestation_key)
     for idx in range(events):
         logger.log(
