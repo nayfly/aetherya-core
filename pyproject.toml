@@ -83,6 +83,7 @@ aetherya = "aetherya.cli:main"
 aetherya-api = "aetherya.api_server:main"
 aetherya-decision-server = "aetherya.decision_server:main"
 aetherya-approvals-server = "aetherya.approvals_server:main"
+aetherya-gateway = "aetherya.gateway_server:main"
 
 [[tool.mypy.overrides]]
 module = ["numpy", "numpy.*", "sentence_transformers", "sentence_transformers.*"]
