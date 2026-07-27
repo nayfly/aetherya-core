@@ -570,6 +570,29 @@ def test_the_pipeline_accepts_any_limiter_backend() -> None:
     assert "ActorRateLimiter" not in str(annotation)
 
 
+def test_the_slim_policy_differs_only_in_the_semantic_layer() -> None:
+    """
+    `config/policy.slim.yaml` exists so the image can drop PyTorch (~8.7GB ->
+    ~330MB). That is only safe because the semantic layer is advisory: capped
+    below every deny threshold, it can escalate to a human but never refuse
+    alone, so disabling it changes nothing about what is hard-denied. Three
+    policy files is a drift hazard, so the difference is pinned to one field.
+    """
+    from dataclasses import asdict
+
+    docker = load_policy_config("config/policy.docker.yaml")
+    slim = load_policy_config("config/policy.slim.yaml")
+
+    assert docker.constitution_config.use_semantic is True
+    assert slim.constitution_config.use_semantic is False
+
+    ignored = {"policy_fingerprint", "effective_fingerprint", "constitution_config"}
+    assert {k: v for k, v in asdict(docker).items() if k not in ignored} == {
+        k: v for k, v in asdict(slim).items() if k not in ignored
+    }
+    assert replace(docker.constitution_config, use_semantic=False) == slim.constitution_config
+
+
 def test_the_deployment_policy_differs_only_in_the_rate_limit_backend() -> None:
     """
     `config/policy.docker.yaml` exists so the container gets the distributed

@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added (phase-1 sidecar)
+
+- `enforcement.py` + `enforcement.phase` in policy — the rollout posture is now configuration. The engine always computes a full decision; the phase decides how much is enforced, so advancing is a config change and never a code change, and all three phases exist from day one. `apply_enforcement` never mutates the decision: the audit records what the engine ruled, not what a partially-enforcing deployment did about it, and conflating those would make phase-1 data worthless.
+- `client.py` — `AetheryaClient`, a dependency-free HTTP client for the sidecar shape (agent in one process, engine in another). Fails **closed** from phase 2 on: an unreachable service refuses the action, because a boundary that disappears when the network hiccups is not a boundary. Phase 1 is the explicit exception — it enforces nothing, so an outage must not stop the agent.
+- `rollout_report.py` + `aetherya rollout report` — measures a phase against its exit criteria from the audit trail: window size, decisions by state, what the next phase would act on, distinct actors and tools per state, intent escalations, skipped semantics, policy-fingerprint uniformity, chain integrity, and the `hard_deny` events that require manual review. The `hard_deny_reviewed` criterion **never auto-passes**: the tool can count and list those events, it cannot judge them, and auto-passing would turn the phase gate into the formality it exists to prevent. Exits non-zero until ready, so it works as a promotion gate.
+- `examples/sidecar_agent.py` — the same agent trajectory as `agent_loop.py`, but over HTTP against the container, with the shadow gap counted per run.
+- `Dockerfile.slim` + `config/policy.slim.yaml` — **8.7GB → 330MB**. The size was never ÆTHERYA; it was PyTorch, pulled in by sentence-transformers for the advisory layer. That layer is capped below every deny threshold, so it can escalate to a human but never refuse alone, and the deterministic core does not use it. Verified: the slim image hard-denies exactly what the full one does, including the quote-split evasion `r''m -rf /`, and reports healthy in 8s instead of ~25s. A test pins the two policies to differ in that one field.
+
+### Fixed
+
+- `rollout report` crashed on a malformed audit line or an empty file, because `verify_audit_file` raises rather than returning. Both are findings an operator must see before advancing a phase — they are now reported as a failed `chain_intact` criterion with the detail, instead of taking the tool down or being silently skipped.
+
 ### Fixed (CI)
 
 - `examples/agent_loop.py`: the OpenAI backend checked for the SDK before checking for the API key, so the error you got depended on whether `openai` happened to be installed. It is present in a dev environment and absent from CI's `[dev]` extra, which is exactly why `test_openai_backend_requires_a_key` passed locally and failed CI on the last two pushes. The key is now checked first — a missing key is the more common misconfiguration, and you should not need the SDK installed to be told about it — and both paths have tests, one of which blocks the import to prove it.

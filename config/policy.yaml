@@ -157,6 +157,16 @@ rate_limit:
   redis_url_env: AETHERYA_RATE_LIMIT_REDIS_URL
   redis_prefix: "aetherya:ratelimit"
 
+# Rollout posture. The engine always computes a full decision; the phase only
+# decides how much of it is enforced, so advancing is a config change and never
+# a code change. Measure the current phase with `aetherya rollout report` before
+# advancing. See docs/rollout-phases.md.
+#   1 shadow    — observe only, nothing is refused
+#   2 hard_deny — refuse hard_deny
+#   3 full      — refuse hard_deny and deny, hold escalate for confirmation
+enforcement:
+  phase: 1
+
 # Intent escalation — decouples the guard chain from the parser's verb list.
 # ExecutionGate and the capability matrix only evaluate `operate` requests, so
 # without this stage a command the parser does not recognise (e.g.

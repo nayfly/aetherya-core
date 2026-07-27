@@ -235,6 +235,21 @@ class IntentEscalationConfig:
 
 
 @dataclass(frozen=True)
+class EnforcementConfig:
+    """
+    Rollout posture. The engine always computes a full decision; the phase only
+    decides how much of it is enforced, so advancing is a config change rather
+    than a code change. See docs/rollout-phases.md.
+
+    1 shadow    — observe only
+    2 hard_deny — refuse hard_deny
+    3 full      — refuse hard_deny and deny, hold escalate for confirmation
+    """
+
+    phase: int = 1
+
+
+@dataclass(frozen=True)
 class PolicyConfig:
     version: int
     modes: dict[str, ModeConfig]
@@ -250,6 +265,7 @@ class PolicyConfig:
     constitution_config: ConstitutionConfig = field(default_factory=ConstitutionConfig)
     intent_escalation: IntentEscalationConfig = field(default_factory=IntentEscalationConfig)
     rate_limit: RateLimitBackendConfig = field(default_factory=RateLimitBackendConfig)
+    enforcement: EnforcementConfig = field(default_factory=EnforcementConfig)
     effective_fingerprint: str | None = None
 
 
@@ -603,6 +619,14 @@ def _validate_semantic_authority(
             )
 
 
+def _load_enforcement(raw: dict[str, Any] | None) -> EnforcementConfig:
+    data = raw or {}
+    phase = int(data.get("phase", 1))
+    if phase not in {1, 2, 3}:
+        raise ValueError("enforcement.phase must be 1, 2 or 3")
+    return EnforcementConfig(phase=phase)
+
+
 def _load_intent_escalation(raw: dict[str, Any] | None) -> IntentEscalationConfig:
     data = raw or {}
     return IntentEscalationConfig(
@@ -688,6 +712,7 @@ def load_policy_config(
     constitution_config = _load_constitution_config(data.get("constitution"))
     intent_escalation = _load_intent_escalation(data.get("intent_escalation"))
     rate_limit = _load_rate_limit(data.get("rate_limit"))
+    enforcement = _load_enforcement(data.get("enforcement"))
     _validate_semantic_authority(constitution_config, modes)
 
     config = PolicyConfig(
@@ -705,6 +730,7 @@ def load_policy_config(
         constitution_config=constitution_config,
         intent_escalation=intent_escalation,
         rate_limit=rate_limit,
+        enforcement=enforcement,
     )
     config = replace(config, effective_fingerprint=compute_effective_fingerprint(config))
 

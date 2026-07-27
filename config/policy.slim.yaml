@@ -1,12 +1,11 @@
-# Deployment policy: identical to config/policy.yaml except that the rate
-# limiter uses the distributed backend. Mounted by docker-compose.yml.
+# Slim deployment policy: identical to config/policy.docker.yaml with the
+# advisory semantic layer disabled, so the image does not need PyTorch.
 #
-# The repo default stays `memory` so the CLI and a bare `aetherya-api` work
-# with no infrastructure. `redis` fails closed, so pointing at it without a
-# reachable server refuses every request — correct, but not a default.
+# The layer is advisory by construction — capped below every deny threshold,
+# it can escalate to a human but never refuse alone. Disabling it removes
+# paraphrase detection and changes nothing about what is hard-denied.
 #
-# tests/test_deployment_contracts.py asserts these two files differ in
-# exactly this one field, so they cannot drift apart.
+# tests/test_deployment_contracts.py pins the difference to this one field.
 version: 1
 
 modes:
@@ -199,7 +198,7 @@ output_gate:
 # Thresholds govern the SemanticEvaluator similarity cutoffs.
 # Modify with care: lowering thresholds increases sensitivity and false-positive risk.
 constitution:
-  use_semantic: true
+  use_semantic: false
   semantic_violation_threshold: 0.55
   semantic_gray_zone_threshold: 0.35
   # NON-AUTHORITATIVE CONTRACT: the semantic layer is the only learned component
