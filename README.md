@@ -143,6 +143,7 @@ python -m aetherya.audit_verify --audit-path "$AUDIT" --require-chain --json \
 | OutputGate & PII detection | [docs/output-gate.md](docs/output-gate.md) |
 | HTTP API | [docs/api.md](docs/api.md) |
 | Integrations (Python, CLI, agents) | [docs/integrations.md](docs/integrations.md) |
+| Production rollout phases | [docs/rollout-phases.md](docs/rollout-phases.md) |
 | Testing & benchmarks | [docs/testing-and-benchmarks.md](docs/testing-and-benchmarks.md) |
 | Release & verification | [docs/release-and-verification.md](docs/release-and-verification.md) |
 

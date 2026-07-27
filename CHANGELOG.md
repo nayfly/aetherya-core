@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added (rollout)
+
+- `docs/rollout-phases.md` — the three-phase production rollout as an executable plan: shadow, hard-deny enforcement, full enforcement. Each phase states its posture, the wiring change it needs, what to measure, and **exit criteria that can fail**, including what to do when shadow mode reports an unacceptable false-positive rate. Also documents the target operating configuration and the `/health` readiness gate.
+- `examples/agent_loop.py` — a real agent loop with the engine as the execution boundary, switchable between the three phases (`--phase 1|2|3`). The existing example showed the API call but not what an agent is; this one runs the loop: the model proposes a tool call, the engine rules on it, and the result *or the refusal* goes back into the conversation. Two backends: a deterministic scripted agent (no API key, no network, reproducible) and a real OpenAI tool-calling loop (`--agent openai`) — the gating code around them is identical, which is the property being demonstrated. The scenario is a prompt injection arriving through tool output rather than a malicious model, so the boundary is doing the work the model cannot.
+- `examples/policy.minimal.yaml`: synchronised with the current `config/policy.yaml` rule families and given a `demo-agent` actor.
+
 ### Fixed (review follow-up)
 
 - **Rate limiter eviction could reset a throttled actor's window.** Verified exploitable, not just an overstated docstring: a throttled client backs off — correct client behaviour — which makes it the least-recently-used entry, so plain LRU dropped it first and its limit reset. An attacker could lift a victim's throttle by flooding distinct actor ids (measured: 2 000 junk actors restored a blocked actor to `allowed`). Windows at or above the limit are now never evicted; when no evictable window remains a *new* actor is refused instead (fail-closed) and counted in `capacity_refusals`. The previous claim that "active actors are never displaced" was stronger than the algorithm guaranteed and has been replaced with what it actually does.

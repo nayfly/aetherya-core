@@ -1,5 +1,6 @@
 # Minimal policy for running examples/ without depending on the repo root.
-# Used by: examples/basic_tool_wrapper.py, examples/agent_integration.py
+# Used by: examples/basic_tool_wrapper.py, examples/agent_integration.py,
+#          examples/agent_loop.py
 #
 # This is a self-contained copy of the default config with no changes to
 # security thresholds or behavior. It is equivalent to config/policy.yaml.
@@ -40,6 +41,11 @@ procedural_guard:
     - "rm -rf /"
     - "mkfs"
     - ":(){:|:&};:"
+    - "block_device_write"
+    - "interpreter_destruction"
+    - "find_delete"
+    - "recursive_force_delete"
+    - "remote_code_execution"
   privileged_ops:
     - "apt remove"
     - "apt purge"
@@ -87,6 +93,11 @@ capability_matrix:
         - request
         - command
   actors:
+    demo-agent:
+      roles:
+        - operator
+      tools: []
+      operations: []
     robert:
       roles:
         - operator
