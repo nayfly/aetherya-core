@@ -43,6 +43,11 @@ services:
       # not that this service produced it.
       AETHERYA_ATTESTATION_KEY: "local-dev-attestation-key-replace-me"
 
+      # Gates the operator console. Recording a hard-deny review requires this
+      # to be set — the verdict is attributed to a named reviewer, so it has to
+      # be authenticated. Reads are gated by it too once it exists.
+      AETHERYA_CONSOLE_API_KEY: "${AETHERYA_CONSOLE_API_KEY:-local-dev-console-key-replace-me}"
+
       # Pin the policy so a replica refuses to start under an unintended one.
       # Get the value with: aetherya policy fingerprint --json
       # Left unset locally so the stack comes up before you have run that.
