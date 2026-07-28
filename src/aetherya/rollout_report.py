@@ -11,6 +11,7 @@ from typing import Any
 
 from aetherya.audit_verify import verify_audit_file
 from aetherya.enforcement import PHASES, resolve_phase
+from aetherya.review_store import FALSE_POSITIVE, ReviewStore
 
 # ---------------------------------------------------------------------------
 # Phase-1 measurement.
@@ -124,11 +125,13 @@ def build_report(
     min_decisions: int = DEFAULT_MIN_DECISIONS,
     min_days: float = DEFAULT_MIN_DAYS,
     max_hard_deny_samples: int = 50,
+    review_path: str | Path | None = None,
 ) -> RolloutReport:
     path = Path(audit_path)
     phase = resolve_phase(current_phase)
     next_phase = PHASES[min(current_phase + 1, max(PHASES))]
     events = _load_events(path)
+    recorded_reviews = ReviewStore(review_path).reviews() if review_path is not None else {}
 
     report = RolloutReport(audit_path=str(path), current_phase=phase.number)
     report.total_decisions = len(events)
@@ -165,14 +168,20 @@ def build_report(
             timestamps.append(ts)
 
         # Every hard_deny needs human eyes before enforcement is switched on.
+        # `event_id` is what a recorded verdict hangs off, so it travels with
+        # the sample rather than being looked up again later.
         if state == "hard_deny" and len(report.hard_deny_events) < max_hard_deny_samples:
+            event_id = str(event.get("event_id", ""))
+            review = recorded_reviews.get(event_id)
             report.hard_deny_events.append(
                 {
+                    "event_id": event_id,
                     "ts": event.get("ts"),
                     "actor": event.get("actor"),
                     "action": str(event.get("action", ""))[:160],
                     "reason": decision.get("reason"),
                     "risk_score": decision.get("risk_score"),
+                    "review": review.to_dict() if review is not None else None,
                 }
             )
 
@@ -236,18 +245,68 @@ def _evaluate_criteria(
                 "one means the window mixes different engines and must be restarted"
             ),
         ),
-        # Deliberately never auto-passes: a human has to look at these. The tool
-        # can list them and count them; it cannot judge them.
-        Criterion(
+        _hard_deny_reviewed(report),
+    ]
+    return criteria
+
+
+def _hard_deny_reviewed(report: RolloutReport) -> Criterion:
+    """
+    Never auto-passes: it passes only on verdicts a human recorded.
+
+    The tool can count hard_deny events and show them; it cannot judge them.
+    What it can do is check that someone did — and refuse to advance while any
+    of them is unreviewed or was judged a false positive.
+    """
+    total = report.states.get("hard_deny", 0)
+    if total == 0:
+        return Criterion(
+            name="hard_deny_reviewed",
+            passed=True,
+            detail="no hard_deny events in this window",
+        )
+
+    unreviewed = [e for e in report.hard_deny_events if e.get("review") is None]
+    false_positives = [
+        e
+        for e in report.hard_deny_events
+        if isinstance(e.get("review"), dict) and e["review"].get("verdict") == FALSE_POSITIVE
+    ]
+
+    # A false positive is the finding phase 1 exists to produce. It blocks the
+    # advance because enforcing a rule a human already called wrong is exactly
+    # the outcome this phase is meant to prevent.
+    if false_positives:
+        return Criterion(
             name="hard_deny_reviewed",
             passed=False,
             detail=(
-                f"{report.states.get('hard_deny', 0)} hard_deny event(s) require manual "
-                "review — confirm every one is a true positive, then advance"
+                f"{len(false_positives)} of {total} hard_deny event(s) were judged FALSE "
+                "positives — fix the rule and restart the window, do not advance "
+                "(see docs/rollout-phases.md#phase-1--shadow)"
             ),
-        ),
-    ]
-    return criteria
+        )
+
+    # `hard_deny_events` is capped by max_hard_deny_samples. If the window holds
+    # more than we sampled, the ones we never showed cannot have been reviewed.
+    unsampled = total - len(report.hard_deny_events)
+    outstanding = len(unreviewed) + max(unsampled, 0)
+    if outstanding:
+        return Criterion(
+            name="hard_deny_reviewed",
+            passed=False,
+            detail=(
+                f"{outstanding} of {total} hard_deny event(s) still require manual review "
+                "— confirm every one is a true positive, then advance"
+            ),
+        )
+
+    reviewers = sorted({e["review"]["reviewer"] for e in report.hard_deny_events})
+    return Criterion(
+        name="hard_deny_reviewed",
+        passed=True,
+        detail=f"all {total} hard_deny event(s) reviewed and confirmed by {', '.join(reviewers)}",
+    )
 
 
 def _print_text(report: RolloutReport) -> None:
@@ -300,6 +359,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--phase", type=int, default=1, choices=sorted(PHASES))
     parser.add_argument("--min-decisions", type=int, default=DEFAULT_MIN_DECISIONS)
     parser.add_argument("--min-days", type=float, default=DEFAULT_MIN_DAYS)
+    parser.add_argument(
+        "--review-path",
+        default="audit/reviews.jsonl",
+        help="Human verdicts on hard_deny events, as recorded by the operator console.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     args = parser.parse_args(argv)
 
@@ -309,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             current_phase=int(args.phase),
             min_decisions=int(args.min_decisions),
             min_days=float(args.min_days),
+            review_path=args.review_path,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

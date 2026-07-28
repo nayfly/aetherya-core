@@ -82,6 +82,32 @@ the source for the rest.
 3. Zero `hard_deny` on a code path a human agrees should have been allowed.
 4. The audit chain verifies clean (`--require-chain`) over the whole window.
 
+**Recording the review.** Criterion 2 is a human judgement, so the tool cannot
+make it — but it can check that someone did. Open the operator console, work
+through the hard-deny queue, and mark each event:
+
+```bash
+export AETHERYA_CONSOLE_API_KEY=...   # required: the verdict is attributed
+make api_serve                        # console at http://127.0.0.1:8080/
+```
+
+Each verdict is appended to `audit/reviews.jsonl` against the audit `event_id`,
+with the reviewer's name and timestamp. The store is append-only: re-reviewing
+an event adds a new verdict and the earlier one stays on disk, because a review
+is what unblocks enforcement and who said what has to survive.
+
+`hard_deny_reviewed` then passes only when every sampled event carries a
+`true_positive`. Two things deliberately do *not* pass it:
+
+- **Any `false_positive`.** Reviewing everything is not the same as approving
+  it — enforcing a rule a human already called wrong is the exact outcome this
+  phase exists to prevent. Fix the rule, then restart the window.
+- **Events beyond `max_hard_deny_samples`.** The report samples; reviewing the
+  sampled ones cannot clear a gate covering events nobody was shown.
+
+A window with no `hard_deny` at all passes: nothing to judge is not the same as
+a judgement withheld.
+
 **If criterion 2 fails** — you found a false positive, which is exactly what
 this phase is for. In order of preference:
 

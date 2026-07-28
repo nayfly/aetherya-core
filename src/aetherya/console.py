@@ -88,6 +88,16 @@ def console_html() -> str:
               border:1px solid rgba(217,154,43,.4)}
   .verdict.yes{background:rgba(43,184,150,.14);color:var(--allow);
                border:1px solid rgba(43,184,150,.4)}
+  .review.done{border-left-color:var(--muted);opacity:.72}
+  .actions{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+  .actions button{border:1px solid var(--line);background:var(--panel);
+                  color:var(--fg);border-radius:6px;padding:6px 11px;cursor:pointer;
+                  font-size:.76rem;font-family:inherit}
+  .actions button.tp:hover{border-color:var(--allow);color:var(--allow)}
+  .actions button.fp:hover{border-color:var(--hard);color:var(--hard)}
+  .rv{margin-top:9px;font-size:.76rem;font-weight:600}
+  .rv.tp{color:var(--allow)} .rv.fp{color:var(--hard)}
+  .rv .note{font-weight:400;margin-top:3px}
   .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:.85rem}
   .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;margin:10px 0 6px;
        background:var(--panel-2)}
@@ -129,7 +139,7 @@ def console_html() -> str:
   </div>
 
   <section class="card" style="margin-top:14px">
-    <h2>Hard-deny review</h2>
+    <h2>Hard-deny review <span id="review-count" class="muted"></span></h2>
     <p class="hint">
       Every one of these needs human eyes before enforcement is switched on.
       A false positive here is a detection bug — add the case to the corpus and
@@ -139,7 +149,8 @@ def console_html() -> str:
   </section>
 
   <footer>
-    Read-only view of the audit trail. Do not expose this port publicly.
+    Reviews are recorded against the audit trail and are what let
+    <code>hard_deny_reviewed</code> pass. Do not expose this port publicly.
   </footer>
 </div>
 
@@ -257,14 +268,72 @@ async function loadRollout(){
 
   const review = document.getElementById("review");
   const events = rep.hard_deny_events || [];
+  const pending = events.filter(e => !e.review).length;
+  document.getElementById("review-count").textContent =
+    events.length ? `${pending} of ${events.length} pending` : "";
+
   review.innerHTML = events.length ? events.map(e => `
-    <div class="review">
+    <div class="review${e.review ? " done" : ""}">
       <div class="meta"><span>${esc(time(e.ts))}</span><span>actor: ${esc(e.actor)}</span>
         <span>risk: ${esc(e.risk_score)}</span></div>
       <div class="mono">${esc(e.action)}</div>
       <div class="muted" style="margin-top:5px">→ ${esc(e.reason)}</div>
+      ${e.review ? verdictBadge(e.review) : verdictButtons(e.event_id)}
     </div>`).join("")
     : `<div class="empty">no hard-deny events in the window</div>`;
+
+  review.querySelectorAll("button[data-verdict]").forEach(b => {
+    b.onclick = () => submitReview(b.dataset.id, b.dataset.verdict);
+  });
+}
+
+function verdictBadge(r){
+  const ok = r.verdict === "true_positive";
+  return `<div class="rv ${ok ? "tp" : "fp"}">
+    ${ok ? "✓ confirmed true positive" : "✗ FALSE POSITIVE — blocks the advance"}
+    <span class="muted"> · ${esc(r.reviewer)} · ${esc(time(r.ts))}</span>
+    ${r.note ? `<div class="muted note">${esc(r.note)}</div>` : ""}
+  </div>`;
+}
+
+function verdictButtons(id){
+  return `<div class="actions">
+    <button data-verdict="true_positive" data-id="${esc(id)}" class="tp">
+      ✓ Correct — it should have been blocked</button>
+    <button data-verdict="false_positive" data-id="${esc(id)}" class="fp">
+      ✗ False positive</button>
+  </div>`;
+}
+
+async function submitReview(eventId, verdict){
+  const reviewer = localStorage.getItem("aetherya.reviewer") || prompt("Your name (recorded with the verdict):");
+  if(!reviewer) return;
+  localStorage.setItem("aetherya.reviewer", reviewer);
+
+  // A false positive is a claim the engine got it wrong. The note is what
+  // tells you later which rule to narrow, so it is required, not optional.
+  let note = "";
+  if(verdict === "false_positive"){
+    note = prompt("Why was this a false positive? (required — it is what identifies the rule to fix)") || "";
+    if(!note.trim()){ return; }
+  }
+
+  const key = localStorage.getItem("aetherya.consoleKey") || "";
+  const r = await fetch("/v1/reviews", {
+    method: "POST",
+    headers: {"Content-Type":"application/json", "X-AETHERYA-Console-Key": key},
+    body: JSON.stringify({event_id: eventId, verdict, reviewer, note})
+  });
+  const body = await r.json().catch(() => ({}));
+  if(!r.ok){
+    if(r.status === 401){
+      const entered = prompt("Console key (AETHERYA_CONSOLE_API_KEY):");
+      if(entered){ localStorage.setItem("aetherya.consoleKey", entered); return submitReview(eventId, verdict); }
+    }
+    alert("Could not record the review:\n\n" + (body.error || r.status));
+    return;
+  }
+  loadRollout();
 }
 
 function refresh(){ loadStatus(); loadFeed(); loadRollout(); }

@@ -77,6 +77,24 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
         raw = parse_qs(urlsplit(self.path).query)
         return {key: values[0] for key, values in raw.items() if values}
 
+    def _console_authorized(self) -> bool:
+        """Answers 401 itself and returns False when the console key does not match."""
+        expected = os.getenv("AETHERYA_CONSOLE_API_KEY", "").strip()
+        if not expected:
+            return True
+        provided = self.headers.get("X-AETHERYA-Console-Key", "").strip()
+        if provided and hmac.compare_digest(provided, expected):
+            return True
+        self._send_json(
+            401,
+            {
+                "ok": False,
+                "error_type": "Unauthorized",
+                "error": "missing or invalid console key",
+            },
+        )
+        return False
+
     def _handle_request(self) -> None:
         method = self.command.upper()
         path = urlsplit(self.path).path
@@ -87,27 +105,54 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
         # Read-only console data. Gated behind AETHERYA_CONSOLE_API_KEY when it
         # is set; open otherwise, like the rest of the decision profile. This
         # view exposes every recorded action, so the port must not be public.
-        if method == "GET" and path in {"/v1/decisions", "/v1/rollout/report"}:
+        if method == "GET" and path in {"/v1/decisions", "/v1/rollout/report", "/v1/reviews"}:
             if self.api is None:
                 self._send_json(500, {"ok": False, "error": "api not configured"})
                 return
-            expected = os.getenv("AETHERYA_CONSOLE_API_KEY", "").strip()
-            if expected:
-                provided = self.headers.get("X-AETHERYA-Console-Key", "").strip()
-                if not provided or not hmac.compare_digest(provided, expected):
-                    self._send_json(
-                        401,
-                        {
-                            "ok": False,
-                            "error_type": "Unauthorized",
-                            "error": "missing or invalid console key",
-                        },
-                    )
-                    return
+            if not self._console_authorized():
+                return
             query = self._query()
-            status, body = (
-                self.api.decisions(query) if path == "/v1/decisions" else self.api.rollout(query)
-            )
+            if path == "/v1/decisions":
+                status, body = self.api.decisions(query)
+            elif path == "/v1/reviews":
+                status, body = self.api.reviews()
+            else:
+                status, body = self.api.rollout(query)
+            self._send_json(status, body)
+            return
+
+        # Recording a review is the console's only write, and it is what lets
+        # `hard_deny_reviewed` pass. Unlike the reads above it is never open:
+        # without a key the verdict carries a reviewer name that nobody had to
+        # prove, which is worse than having no attribution at all.
+        if method == "POST" and path == "/v1/reviews":
+            if self.api is None:
+                self._send_json(500, {"ok": False, "error": "api not configured"})
+                return
+            if not os.getenv("AETHERYA_CONSOLE_API_KEY", "").strip():
+                self._send_json(
+                    503,
+                    {
+                        "ok": False,
+                        "error_type": "ServiceUnavailable",
+                        "error": (
+                            "recording a review requires AETHERYA_CONSOLE_API_KEY to be set "
+                            "— the verdict is attributed to a reviewer and must be authenticated"
+                        ),
+                    },
+                )
+                return
+            if not self._console_authorized():
+                return
+            try:
+                review_payload = self._parse_json_body()
+            except (RequestTooLargeError, ValueError) as exc:
+                code = 413 if isinstance(exc, RequestTooLargeError) else 400
+                self._send_json(
+                    code, {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                )
+                return
+            status, body = self.api.record_review(review_payload)
             self._send_json(status, body)
             return
 
