@@ -78,18 +78,32 @@ def test_hard_deny_sample_is_bounded(tmp_path: Path) -> None:
     assert len(build_report(path, max_hard_deny_samples=5).hard_deny_events) == 5
 
 
-def test_hard_deny_review_never_auto_passes(tmp_path: Path) -> None:
+def test_an_unreviewed_hard_deny_blocks_the_advance(tmp_path: Path) -> None:
     """
     The tool can count and list these; it cannot judge them. Auto-passing would
     turn the phase gate into a formality, which is exactly the failure mode the
     criterion exists to prevent.
     """
-    path = _audit(tmp_path, [("a", "allow", "ok")] * 3)
+    path = _audit(tmp_path, [("a", "hard_deny", "destructive")])
     report = build_report(path, min_decisions=1, min_days=0.0)
 
     reviewed = next(c for c in report.criteria if c.name == "hard_deny_reviewed")
     assert reviewed.passed is False
     assert report.ready_to_advance is False
+
+
+def test_a_window_with_no_hard_deny_has_nothing_to_review(tmp_path: Path) -> None:
+    """
+    Nothing to judge is not the same as a judgement withheld. Blocking here
+    would mean a well-behaved agent could never leave phase 1 — the criterion
+    would be unsatisfiable rather than strict.
+    """
+    path = _audit(tmp_path, [("a", "allow", "ok")] * 3)
+    report = build_report(path, min_decisions=1, min_days=0.0)
+
+    reviewed = next(c for c in report.criteria if c.name == "hard_deny_reviewed")
+    assert reviewed.passed is True
+    assert "no hard_deny events" in reviewed.detail
 
 
 def test_insufficient_window_fails_the_criterion(tmp_path: Path) -> None:
@@ -331,3 +345,43 @@ def test_json_output_is_machine_readable(
     payload: dict[str, Any] = json.loads(capsys.readouterr().out)
     assert payload["window"]["total_decisions"] == 2
     assert isinstance(payload["criteria"], list)
+
+
+def test_timestamps_that_are_not_strings_are_ignored(tmp_path: Path) -> None:
+    path = tmp_path / "decisions.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "actor": "a",
+                "action": "x",
+                "ts": 12345,
+                "decision": {"allowed": True, "risk_score": 0, "reason": "ok", "state": "allow"},
+                "context": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert build_report(path).first_event is None
+
+
+def test_text_output_without_timestamps_omits_the_range(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "decisions.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "actor": "a",
+                "action": "x",
+                "decision": {"allowed": True, "risk_score": 0, "reason": "ok", "state": "allow"},
+                "context": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    main(["--audit-path", str(path)])
+    out = capsys.readouterr().out
+    assert "window" in out
+    assert "  ->  " not in out

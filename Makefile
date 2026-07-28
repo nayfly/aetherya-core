@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve api_decision_serve api_approvals_serve
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve api_decision_serve api_approvals_serve gateway_serve gateway_smoke
 
 fmt:
 	ruff format src tests
@@ -51,6 +51,12 @@ api_decision_serve:
 
 api_approvals_serve:
 	python -m aetherya.api_server --service-mode approvals --host 127.0.0.1 --port 8081
+
+gateway_serve:
+	python -m aetherya.gateway_server --host 127.0.0.1 --port 8090
+
+gateway_smoke:
+	python scripts/gateway_smoke.py --provider anthropic --phase 2
 
 api_stop:
 	@echo "Liberando puerto 8080..."
