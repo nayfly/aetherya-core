@@ -166,8 +166,26 @@ const clip = (s,n) => { s = String(s ?? ""); return s.length > n ? s.slice(0,n)+
 const time = t => { if(!t) return "—"; try { return new Date(t).toLocaleString(); }
                     catch(e){ return t; } };
 
-async function get(url){
-  const r = await fetch(url, {headers:{"Accept":"application/json"}});
+// One place decides how the key travels. When AETHERYA_CONSOLE_API_KEY is set
+// it gates the reads too, so a page that only sent it on writes would render
+// empty against a configured deployment — which is the normal deployment.
+const KEY = "aetherya.consoleKey";
+const consoleKey = () => localStorage.getItem(KEY) || "";
+
+function askForKey(){
+  const entered = prompt("Console key (AETHERYA_CONSOLE_API_KEY):");
+  if(entered){ localStorage.setItem(KEY, entered); return true; }
+  return false;
+}
+
+async function get(url, retry = true){
+  const r = await fetch(url, {headers:{
+    "Accept":"application/json", "X-AETHERYA-Console-Key": consoleKey()
+  }});
+  if(r.status === 401){
+    if(retry && askForKey()) return get(url, false);
+    throw new Error("unauthorized");
+  }
   return await r.json();
 }
 
@@ -318,25 +336,37 @@ async function submitReview(eventId, verdict){
     if(!note.trim()){ return; }
   }
 
-  const key = localStorage.getItem("aetherya.consoleKey") || "";
   const r = await fetch("/v1/reviews", {
     method: "POST",
-    headers: {"Content-Type":"application/json", "X-AETHERYA-Console-Key": key},
+    headers: {"Content-Type":"application/json", "X-AETHERYA-Console-Key": consoleKey()},
     body: JSON.stringify({event_id: eventId, verdict, reviewer, note})
   });
   const body = await r.json().catch(() => ({}));
   if(!r.ok){
-    if(r.status === 401){
-      const entered = prompt("Console key (AETHERYA_CONSOLE_API_KEY):");
-      if(entered){ localStorage.setItem("aetherya.consoleKey", entered); return submitReview(eventId, verdict); }
-    }
+    if(r.status === 401 && askForKey()) return submitReview(eventId, verdict);
     alert("Could not record the review:\n\n" + (body.error || r.status));
     return;
   }
   loadRollout();
 }
 
-function refresh(){ loadStatus(); loadFeed(); loadRollout(); }
+function locked(){
+  // Without this the three panels sit on "loading…" forever and the page looks
+  // broken rather than locked, which sends you to the server logs for nothing.
+  const msg = `<div class="empty">Locked — reload and enter the console key.</div>`;
+  document.getElementById("criteria").innerHTML = msg;
+  document.getElementById("review").innerHTML = msg;
+  document.getElementById("feed").innerHTML =
+    `<tr><td colspan="6" class="empty">Locked — reload and enter the console key.</td></tr>`;
+}
+
+async function refresh(){
+  try {
+    await loadStatus(); await loadFeed(); await loadRollout();
+  } catch(e){
+    locked();
+  }
+}
 renderFilters();
 refresh();
 setInterval(refresh, 10000);

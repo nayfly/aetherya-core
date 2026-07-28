@@ -614,3 +614,27 @@ def test_the_review_route_fails_when_the_api_is_not_configured() -> None:
     handler = _Bare()
     handler._handle_request()  # noqa: SLF001
     assert handler.sent[0][0] == 500
+
+
+def test_the_console_sends_the_key_on_reads_too() -> None:
+    """
+    Regression: the key was only sent on writes. With AETHERYA_CONSOLE_API_KEY
+    set — the normal deployment — every read 401'd and the page rendered empty
+    while the server looked healthy.
+    """
+    html = console_html()
+    get_fn = html.split("async function get(url")[1].split("}")[0]
+    assert "X-AETHERYA-Console-Key" in get_fn
+
+
+def test_the_console_reports_being_locked_rather_than_hanging() -> None:
+    """A page stuck on `loading…` sends you to the server logs for nothing."""
+    html = console_html()
+    assert "Locked — reload and enter the console key." in html
+    assert "function locked()" in html
+
+
+def test_the_console_reads_the_key_from_one_place() -> None:
+    """Two copies of the key drift; the write path would authenticate and the
+    read path would not, which is exactly the bug above."""
+    assert console_html().count("localStorage.getItem(KEY)") == 1
