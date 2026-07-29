@@ -19,6 +19,7 @@ Costs a few cents. Exits non-zero if the boundary did not hold.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -85,6 +86,16 @@ def main(argv: list[str] | None = None) -> int:
         from openai import OpenAI
     except ImportError:
         print('The client side of this smoke needs: pip install -e ".[llm]"', file=sys.stderr)
+        return 2
+
+    # Checked up front for the same reason as the key: missing, it surfaces as a
+    # 502 buried in an OpenAI SDK traceback, which points at the wrong hop.
+    extra = {"anthropic": "anthropic", "openai": "llm"}[args.provider]
+    if importlib.util.find_spec(args.provider) is None:
+        print(
+            f'The gateway needs the {args.provider} SDK: pip install -e ".[{extra}]"',
+            file=sys.stderr,
+        )
         return 2
 
     gateway = build_gateway(
