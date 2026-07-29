@@ -344,7 +344,9 @@ async function submitReview(eventId, verdict){
   const body = await r.json().catch(() => ({}));
   if(!r.ok){
     if(r.status === 401 && askForKey()) return submitReview(eventId, verdict);
-    alert("Could not record the review:\n\n" + (body.error || r.status));
+    alert(`Could not record the review:
+
+${body.error || r.status}`);
     return;
   }
   loadRollout();

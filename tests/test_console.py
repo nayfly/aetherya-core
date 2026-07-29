@@ -657,3 +657,48 @@ def test_the_console_page_is_not_cached(tmp_path: Path, monkeypatch: pytest.Monk
             assert "no-store" in response.headers.get("Cache-Control", "")
     finally:
         server.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The page has to parse, not merely contain the right substrings
+# ---------------------------------------------------------------------------
+
+
+def test_the_console_template_contains_no_python_escape_sequences() -> None:
+    r"""
+    Regression, and the reason every other test here missed it.
+
+    The console's JS lives inside a Python string literal. A `\n` written for
+    JavaScript is consumed by Python and emitted as a real newline, which splits
+    the JS string it was in and stops the *entire script* from parsing. Nothing
+    on the page runs, every panel sits on "loading…", and the server reports
+    healthy the whole time — so it reads as a server or cache problem.
+
+    Every other console test asserted substrings, which all still matched.
+    Checking the source is what catches this: any of these escapes appearing
+    literally in the template is meant for the browser and will never reach it.
+    Use a JS template literal with a real line break instead.
+    """
+    source = Path("src/aetherya/console.py").read_text(encoding="utf-8")
+    template = source[source.index('"""') :]
+
+    offenders = [
+        (line_no, line.strip())
+        for line_no, line in enumerate(template.splitlines(), start=1)
+        for escape in ("\\n", "\\t", "\\r", "\\x")
+        if escape in line
+    ]
+    assert offenders == [], f"Python escape sequences in the JS template: {offenders}"
+
+
+def test_the_rendered_page_has_no_stray_newline_inside_a_js_string() -> None:
+    """
+    The observable form of the bug above: `alert("...` left open at end of line.
+    Asserted against the rendered output, so it holds however the template is
+    later refactored.
+    """
+    js = console_html().split("<script>")[1].split("</script>")[0]
+    for line in js.splitlines():
+        for opener in ('alert("', 'prompt("', 'console.log("'):
+            if opener in line:
+                assert line.count('"') % 2 == 0, f"unterminated string literal: {line.strip()}"
