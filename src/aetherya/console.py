@@ -89,6 +89,7 @@ def console_html() -> str:
   .verdict.yes{background:rgba(43,184,150,.14);color:var(--allow);
                border:1px solid rgba(43,184,150,.4)}
   .review.done{border-left-color:var(--muted);opacity:.72}
+  .review.hold{border-left-color:var(--escalate)}
   .actions{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
   .actions button{border:1px solid var(--line);background:var(--panel);
                   color:var(--fg);border-radius:6px;padding:6px 11px;cursor:pointer;
@@ -141,6 +142,15 @@ def console_html() -> str:
       <div id="verdict"></div>
     </section>
   </div>
+
+  <section class="card" id="approvals-card" style="margin-top:14px;display:none">
+    <h2>Waiting for approval <span id="approval-count" class="muted"></span></h2>
+    <p class="hint">
+      Actions held for a human. These are live — an agent is blocked on each one
+      until you answer, and each expires on its own if nobody does.
+    </p>
+    <div id="approvals"></div>
+  </section>
 
   <section class="card" style="margin-top:14px">
     <h2>Hard-deny review <span id="review-count" class="muted"></span></h2>
@@ -337,6 +347,7 @@ function verdictButtons(id){
 }
 
 const REVIEWER = "aetherya.reviewer";
+const ADMIN = "aetherya.adminKey";
 
 async function submitReview(eventId, verdict){
   // Worded to be unmistakable next to the key prompt: an operator who has just
@@ -378,6 +389,108 @@ ${body.error || r.status}`);
   loadRollout();
 }
 
+// ---------------------------------------------------------------------------
+// Approval queue
+// ---------------------------------------------------------------------------
+
+async function loadApprovals(){
+  const card = document.getElementById("approvals-card");
+  const body = await get("/v1/approvals/pending").catch(() => null);
+  // The queue is optional. A deployment with it disabled should not show a
+  // permanently empty panel implying something is broken.
+  if(!body || !body.ok){ card.style.display = "none"; return; }
+
+  const rows = body.pending || [];
+  const stats = body.stats || {};
+  card.style.display = rows.length || stats.expired ? "block" : "none";
+  document.getElementById("approval-count").textContent =
+    rows.length ? `${rows.length} waiting` : "";
+
+  const panel = document.getElementById("approvals");
+  panel.innerHTML = rows.length ? rows.map(r => `
+    <div class="review hold">
+      <div class="meta"><span>${esc(r.actor)}</span>
+        <span>${esc(r.state)} · risk ${esc(r.risk_score)}</span>
+        <span>held ${esc(since(r.requested_at))}</span>
+        <span>expires ${esc(time(r.expires_at))}</span></div>
+      <div class="mono">${esc((r.action||{}).raw_input || "")}</div>
+      <div class="muted" style="margin-top:5px">→ ${esc(r.reason)}</div>
+      <div class="actions">
+        <button data-approve="1" data-id="${esc(r.request_id)}" class="tp">Approve</button>
+        <button data-approve="0" data-id="${esc(r.request_id)}" class="fp">Reject</button>
+      </div>
+    </div>`).join("")
+    : `<div class="empty">${stats.expired || 0} request(s) expired unanswered</div>`;
+
+  panel.querySelectorAll("button[data-approve]").forEach(b => {
+    b.onclick = () => resolveApproval(b.dataset.id, b.dataset.approve === "1");
+  });
+}
+
+const since = ts => {
+  if(!ts) return "—";
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(ts).getTime())/1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.round(seconds/60)}m`;
+};
+
+async function resolveApproval(requestId, approved){
+  let reviewer = localStorage.getItem(REVIEWER);
+  while(!reviewer){
+    reviewer = (prompt("WHO ARE YOU? Your name — not a key. It is recorded against this decision.") || "").trim();
+    if(!reviewer) return;
+    if(reviewer === consoleKey()){
+      alert("That is the console key, not a name.");
+      reviewer = "";
+    }
+  }
+  localStorage.setItem(REVIEWER, reviewer);
+
+  let note = "";
+  if(!approved){
+    note = prompt("Why are you rejecting this? (required — the agent's owner will ask)") || "";
+    if(!note.trim()) return;
+  }
+
+  // Answering mints a signed proof, so this needs the admin key rather than the
+  // console key: reading the queue and authorising an irreversible action on
+  // someone's behalf are not the same privilege.
+  let admin = sessionStorage.getItem(ADMIN);
+  if(!admin){
+    admin = (prompt("Admin key (AETHERYA_APPROVALS_API_KEY) — approving signs a proof:") || "").trim();
+    if(!admin) return;
+    // Session storage, not local: an approval key should not outlive the tab.
+    sessionStorage.setItem(ADMIN, admin);
+  }
+
+  const r = await fetch("/v1/approvals/resolve", {
+    method: "POST",
+    headers: {"Content-Type":"application/json", "X-AETHERYA-Admin-Key": admin},
+    body: JSON.stringify({request_id: requestId, approved, decided_by: reviewer, note})
+  });
+  const body = await r.json().catch(() => ({}));
+  if(!r.ok){
+    if(r.status === 401 || r.status === 403) sessionStorage.removeItem(ADMIN);
+    alert(`Could not record the decision:
+
+${body.error || r.status}`);
+    loadApprovals();
+    return;
+  }
+  // The agent polling /v1/approvals/status picks these up on its own. Shown
+  // here because an operator running the flow by hand needs all three: the
+  // proof alone leaves the retry refused for missing evidence.
+  if(body.confirmation){
+    const shown = Object.entries(body.confirmation)
+      .map(([k, v]) => `${k}=${String(v).slice(0, 60)}`).join(`
+`);
+    console.log("[ÆTHERYA] confirmation parameters for the retry:", body.confirmation);
+    alert(`Approved. The agent retries with:
+
+${shown}`);
+  }
+  loadApprovals();
+}
+
 // Polling is paused while locked. Without this a wrong key re-prompts on every
 // tick; with it the page waits for the operator instead of nagging.
 let paused = false;
@@ -405,7 +518,7 @@ function unlock(){
 async function refresh(){
   if(paused) return;
   try {
-    await loadStatus(); await loadFeed(); await loadRollout();
+    await loadStatus(); await loadFeed(); await loadRollout(); await loadApprovals();
   } catch(e){
     paused = true;
     locked(e instanceof Unauthorized);

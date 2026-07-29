@@ -538,3 +538,107 @@ def test_the_resolve_route_can_be_disabled(tmp_path: Path, policy: Path) -> None
     )
     assert code == 404
     assert "route not found" in body["error"]
+
+
+# ---------------------------------------------------------------------------
+# The point of the whole feature: an approval has to actually unblock the action
+# ---------------------------------------------------------------------------
+
+
+def test_an_approval_unblocks_the_held_action(
+    tmp_path: Path, policy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Regression, and the reason this feature nearly shipped as theatre: the
+    ConfirmationGate wants three pieces of evidence, not one. Returning only the
+    signed proof produced an approval that read as successful and left the retry
+    refused for "missing evidence" — a real credential that authorised nothing.
+    """
+    admin = _admin(monkeypatch)
+    api = _api(tmp_path, policy)
+    request_id = _submit(api)
+
+    body = api.resolve_approval(
+        {
+            "request_id": request_id,
+            "approved": True,
+            "decided_by": "robert",
+            "note": "signed off in OPS-412",
+        },
+        **admin,
+    )[1]
+    confirmation = body["confirmation"]
+
+    retry = {**ACTION, "parameters": {**ACTION["parameters"], **confirmation}}
+    code, decided = api.decide({"actor": "robert", "action": retry})
+
+    assert code == 200
+    assert decided["decision"]["allowed"] is True, decided["decision"]
+
+
+def test_the_same_action_without_the_approval_is_still_held(tmp_path: Path, policy: Path) -> None:
+    """The pair is the test: unblocked with the evidence, held without it."""
+    api = _api(tmp_path, policy)
+    _, decided = api.decide({"actor": "robert", "action": ACTION})
+
+    assert decided["decision"]["allowed"] is False
+    assert decided["decision"]["state"] == "escalate"
+
+
+def test_the_proof_alone_does_not_unblock_the_action(
+    tmp_path: Path, policy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Pins the mistake itself. If a future change drops the token or the context
+    from what an approval returns, this fails rather than the flow silently
+    reverting to minting a useless credential.
+    """
+    admin = _admin(monkeypatch)
+    api = _api(tmp_path, policy)
+    request_id = _submit(api)
+    body = api.resolve_approval(
+        {"request_id": request_id, "approved": True, "decided_by": "robert"}, **admin
+    )[1]
+
+    proof_only = {"confirm_proof": body["request"]["proof"]}
+    retry = {**ACTION, "parameters": {**ACTION["parameters"], **proof_only}}
+    _, decided = api.decide({"actor": "robert", "action": retry})
+
+    assert decided["decision"]["allowed"] is False
+    assert "confirmation" in decided["decision"]["reason"]
+
+
+def test_the_confirmation_token_points_back_at_the_approval(
+    tmp_path: Path, policy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Traceability: the token names the approval record that authorised it."""
+    admin = _admin(monkeypatch)
+    api = _api(tmp_path, policy)
+    request_id = _submit(api)
+
+    confirmation = api.resolve_approval(
+        {"request_id": request_id, "approved": True, "decided_by": "robert"}, **admin
+    )[1]["confirmation"]
+
+    assert confirmation["confirm_token"] == f"ack:{request_id.removeprefix('apr_')}"
+    assert request_id in confirmation["confirm_context"]
+    assert "robert" in confirmation["confirm_context"]
+
+
+def test_a_rejection_returns_no_confirmation_parameters(
+    tmp_path: Path, policy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admin = _admin(monkeypatch)
+    api = _api(tmp_path, policy)
+    request_id = _submit(api)
+
+    body = api.resolve_approval(
+        {
+            "request_id": request_id,
+            "approved": False,
+            "decided_by": "robert",
+            "note": "that is PROD",
+        },
+        **admin,
+    )[1]
+    assert "confirmation" not in body

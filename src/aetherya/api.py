@@ -676,7 +676,15 @@ class AetheryaAPI:
                 note=note,
                 proof=proof,
             )
-            return (200, {"ok": True, "request": resolved.to_dict(include_proof=True)})
+            body_out = {"ok": True, "request": resolved.to_dict(include_proof=True)}
+            if proof is not None:
+                body_out["confirmation"] = self._confirmation_parameters(
+                    request_id=request_id,
+                    decided_by=decided_by,
+                    note=note,
+                    proof=proof,
+                )
+            return (200, body_out)
         except ApprovalQueueError as exc:
             return (
                 409,
@@ -687,6 +695,36 @@ class AetheryaAPI:
                 400,
                 {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
             )
+
+    def _confirmation_parameters(
+        self, *, request_id: str, decided_by: str, note: str, proof: str
+    ) -> dict[str, Any]:
+        """
+        Every parameter the agent must merge into its retry, ready to use.
+
+        The ConfirmationGate wants three pieces of evidence, not one: a token
+        acknowledging the confirmation, a human-readable context, and the signed
+        proof. Returning only the proof produced an approval that read as
+        successful and left the action refused for "missing evidence" — the
+        credential was real and useless.
+
+        The token is derived from the request id so it is traceable back to the
+        approval that authorised it, and the context states who approved what
+        rather than being filler to clear the length check.
+        """
+        cfg = load_policy_config(self.settings.policy_path)
+        evidence = cfg.confirmation.evidence
+        # `apr_<hex>` -> `ack:<hex>`, which satisfies the configured token
+        # pattern while staying a pointer to the approval record.
+        token = f"ack:{request_id.removeprefix('apr_')}"
+        context = f"approved by {decided_by} via approval {request_id}"
+        if note:
+            context = f"{context}: {note}"
+        return {
+            evidence.token_param: token,
+            evidence.context_param: context[:500],
+            evidence.signed_proof.proof_param: proof,
+        }
 
     def _mint_queue_proof(self, request: Any) -> str:
         """

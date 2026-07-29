@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -696,17 +699,34 @@ def test_the_console_template_contains_no_python_escape_sequences() -> None:
     assert offenders == [], f"Python escape sequences in the JS template: {offenders}"
 
 
-def test_the_rendered_page_has_no_stray_newline_inside_a_js_string() -> None:
+def test_the_console_javascript_parses() -> None:
     """
-    The observable form of the bug above: `alert("...` left open at end of line.
-    Asserted against the rendered output, so it holds however the template is
-    later refactored.
+    The only reliable check here is a real parser.
+
+    Two attempts at a pure-Python heuristic both produced false positives on
+    lines the page legitimately contains — `/[&<>"\']/g`, and `\'"\':"&quot;"` —
+    so counting quotes is out. Node is preinstalled on CI runners, which is where
+    this needs to hold; it skips on a machine without it, and the source-level
+    escape test above still runs everywhere.
+
+    Twice now a syntax error in this template stopped the entire page from
+    running while every substring assertion kept passing.
     """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the escape-sequence test covers the same class")
+
     js = console_html().split("<script>")[1].split("</script>")[0]
-    for line in js.splitlines():
-        for opener in ('alert("', 'prompt("', 'console.log("'):
-            if opener in line:
-                assert line.count('"') % 2 == 0, f"unterminated string literal: {line.strip()}"
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+        handle.write(js)
+        script = handle.name
+    try:
+        result = subprocess.run(  # noqa: S603
+            [node, "--check", script], capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        Path(script).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
