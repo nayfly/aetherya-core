@@ -630,8 +630,8 @@ def test_the_console_sends_the_key_on_reads_too() -> None:
 def test_the_console_reports_being_locked_rather_than_hanging() -> None:
     """A page stuck on `loading…` sends you to the server logs for nothing."""
     html = console_html()
-    assert "Locked — reload and enter the console key." in html
-    assert "function locked()" in html
+    assert "Locked — the console key was rejected." in html
+    assert "function locked(" in html
 
 
 def test_the_console_reads_the_key_from_one_place() -> None:
@@ -789,3 +789,24 @@ def test_the_console_refuses_to_send_the_key_as_a_name() -> None:
     html = console_html()
     assert "not the console key" in html
     assert "reviewer === consoleKey()" in html
+
+
+def test_a_rejected_key_does_not_reprompt_on_every_poll() -> None:
+    """
+    Regression: `get()` prompted on 401 and the page polls every 10s, so a wrong
+    key produced an inescapable dialog every few seconds. Only refresh() decides
+    when to ask, and it pauses polling until the operator answers.
+    """
+    html = console_html()
+    get_body = html.split("async function get(url)")[1].split("\n}")[0]
+    assert "prompt(" not in get_body
+    assert "if(paused) return;" in html
+    assert "paused = true;" in html
+
+
+def test_a_locked_console_offers_a_way_back_in() -> None:
+    """A dead end with no button is indistinguishable from a broken page."""
+    html = console_html()
+    assert "Enter console key" in html
+    assert "the console key was rejected" in html.lower()
+    assert "function unlock()" in html

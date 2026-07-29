@@ -99,6 +99,10 @@ def console_html() -> str:
   .rv.tp{color:var(--allow)} .rv.fp{color:var(--hard)}
   .rv .note{font-weight:400;margin-top:3px}
   .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:.85rem}
+  .unlock{margin-top:12px;border:1px solid var(--line);background:var(--panel);
+          color:var(--fg);border-radius:6px;padding:7px 14px;cursor:pointer;
+          font-size:.78rem;font-family:inherit}
+  .unlock:hover{border-color:var(--allow);color:var(--allow)}
   .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;margin:10px 0 6px;
        background:var(--panel-2)}
   .bar i{display:block}
@@ -178,14 +182,16 @@ function askForKey(){
   return false;
 }
 
-async function get(url, retry = true){
+class Unauthorized extends Error {}
+
+// Never prompts. Asking here means every failed load asks again, and with a
+// polling refresh behind it a wrong key turns into a dialog every few seconds
+// that cannot be escaped. One place decides when to ask: refresh().
+async function get(url){
   const r = await fetch(url, {headers:{
     "Accept":"application/json", "X-AETHERYA-Console-Key": consoleKey()
   }});
-  if(r.status === 401){
-    if(retry && askForKey()) return get(url, false);
-    throw new Error("unauthorized");
-  }
+  if(r.status === 401) throw new Unauthorized();
   return await r.json();
 }
 
@@ -365,24 +371,42 @@ ${body.error || r.status}`);
   loadRollout();
 }
 
-function locked(){
-  // Without this the three panels sit on "loading…" forever and the page looks
-  // broken rather than locked, which sends you to the server logs for nothing.
-  const msg = `<div class="empty">Locked — reload and enter the console key.</div>`;
-  document.getElementById("criteria").innerHTML = msg;
-  document.getElementById("review").innerHTML = msg;
+// Polling is paused while locked. Without this a wrong key re-prompts on every
+// tick; with it the page waits for the operator instead of nagging.
+let paused = false;
+
+function locked(unauthorized){
+  const text = unauthorized
+    ? "Locked — the console key was rejected."
+    : "Could not reach the engine.";
+  const panel = `<div class="empty">${text}<br>
+    <button id="unlock" class="unlock">Enter console key</button></div>`;
+  document.getElementById("criteria").innerHTML = panel;
+  document.getElementById("review").innerHTML = "";
   document.getElementById("feed").innerHTML =
-    `<tr><td colspan="6" class="empty">Locked — reload and enter the console key.</td></tr>`;
+    `<tr><td colspan="6" class="empty">${text}</td></tr>`;
+  const button = document.getElementById("unlock");
+  if(button) button.onclick = unlock;
+}
+
+function unlock(){
+  if(!askForKey()) return;
+  paused = false;
+  refresh();
 }
 
 async function refresh(){
+  if(paused) return;
   try {
     await loadStatus(); await loadFeed(); await loadRollout();
   } catch(e){
-    locked();
+    paused = true;
+    locked(e instanceof Unauthorized);
   }
 }
+
 renderFilters();
+if(!consoleKey()) askForKey();
 refresh();
 setInterval(refresh, 10000);
 </script>
