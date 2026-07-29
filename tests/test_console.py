@@ -638,3 +638,22 @@ def test_the_console_reads_the_key_from_one_place() -> None:
     """Two copies of the key drift; the write path would authenticate and the
     read path would not, which is exactly the bug above."""
     assert console_html().count("localStorage.getItem(KEY)") == 1
+
+
+def test_the_console_page_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Regression: the page ships inside the engine and changes with every upgrade
+    while its URL does not. Cached, an operator runs the previous console
+    against the new API and gets a page that hangs instead of one that looks
+    out of date.
+    """
+    import urllib.request
+
+    server = _server(tmp_path, monkeypatch)
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+            f"http://127.0.0.1:{server.server_port}/", timeout=5
+        ) as response:
+            assert "no-store" in response.headers.get("Cache-Control", "")
+    finally:
+        server.shutdown()
