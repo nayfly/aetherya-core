@@ -14,6 +14,7 @@ from aetherya.approval_proof import (
     load_approval_keyring,
     verify_approval_proof,
 )
+from aetherya.approval_queue import ApprovalQueue, ApprovalQueueError
 from aetherya.audit import AuditLogger
 from aetherya.audit_sink import mirror_health
 from aetherya.audit_verify import _build_report, verify_audit_file
@@ -45,6 +46,7 @@ class APISettings:
     approval_admin_key_env: str = "AETHERYA_APPROVALS_API_KEY"
     approval_sign_local_only: bool = True
     review_path: Path | None = Path("audit/reviews.jsonl")
+    approval_queue_path: Path | None = Path("audit/approvals.jsonl")
 
 
 def _as_mapping(payload: Any, *, field_name: str) -> dict[str, Any]:
@@ -534,6 +536,200 @@ class AetheryaAPI:
                 return "unknown"
         return None
 
+    # -- approval queue --------------------------------------------------------
+
+    def _queue(self) -> ApprovalQueue:
+        if self.settings.approval_queue_path is None:
+            raise ValueError("approval_queue_path is disabled in API settings")
+        cfg = load_policy_config(self.settings.policy_path)
+        return ApprovalQueue(
+            self.settings.approval_queue_path,
+            ttl_seconds=cfg.confirmation.evidence.signed_proof.max_valid_for_sec,
+        )
+
+    def submit_approval(self, payload: Any) -> tuple[int, dict[str, Any]]:
+        """
+        Park a held action and return a request id for the agent to poll.
+
+        The full structured action is required, not a description of it: the
+        proof an approval mints is scoped to the exact action, so anything less
+        would produce a proof the agent cannot use.
+        """
+        try:
+            body = _as_mapping(payload, field_name="approval request payload")
+            actor = validate_actor(
+                _as_non_empty_str(
+                    body.get("actor", self.settings.default_actor), field_name="actor"
+                )
+            )
+            action = _as_action_request(body.get("action"))
+            request = self._queue().submit(
+                actor=actor,
+                action={
+                    "raw_input": action.raw_input,
+                    "intent": action.intent,
+                    "mode_hint": action.mode_hint,
+                    "tool": action.tool,
+                    "target": action.target,
+                    "parameters": action.parameters,
+                },
+                state=str(body.get("state", "escalate")),
+                risk_score=int(body.get("risk_score", 0) or 0),
+                reason=str(body.get("reason", "")),
+            )
+            return (200, {"ok": True, "request": request.to_dict()})
+        except Exception as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def pending_approvals(self) -> tuple[int, dict[str, Any]]:
+        """Requests waiting on a human, oldest first."""
+        try:
+            queue = self._queue()
+            pending = queue.pending()
+            return (
+                200,
+                {
+                    "ok": True,
+                    "count": len(pending),
+                    "pending": [r.to_dict() for r in pending],
+                    "stats": queue.stats(),
+                },
+            )
+        except Exception as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def approval_status(self, params: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        """
+        One request's current state, for the agent that is waiting on it.
+
+        Returns the proof exactly once — on the poll that first observes the
+        approval — because it is single-use and is never stored.
+        """
+        try:
+            query = params or {}
+            request_id = _as_non_empty_str(query.get("request_id"), field_name="request_id")
+            request = self._queue().get(request_id)
+            if request is None:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"no approval request {request_id!r}",
+                    },
+                )
+            return (200, {"ok": True, "request": request.to_dict()})
+        except Exception as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def resolve_approval(
+        self,
+        payload: Any,
+        *,
+        headers: dict[str, Any] | None,
+        client_ip: str | None,
+    ) -> tuple[int, dict[str, Any]]:
+        """
+        Approve or reject a held action.
+
+        Admin-gated on the same terms as `confirmation/sign`, because approving
+        mints a credential — the console key is enough to read the queue and to
+        record a review, but not to authorise an irreversible action.
+        """
+        auth_error = self._authorize_admin(headers=headers, client_ip=client_ip)
+        if auth_error is not None:
+            return auth_error
+        try:
+            body = _as_mapping(payload, field_name="approval decision payload")
+            request_id = _as_non_empty_str(body.get("request_id"), field_name="request_id")
+            approved = _as_bool(body.get("approved"), field_name="approved", default=False)
+            decided_by = _as_non_empty_str(body.get("decided_by"), field_name="decided_by")
+            note = str(body.get("note") or "")
+            _reject_credentials(decided_by=decided_by, note=note)
+
+            queue = self._queue()
+            request = queue.get(request_id)
+            if request is None:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"no approval request {request_id!r}",
+                    },
+                )
+
+            proof = self._mint_queue_proof(request) if approved else None
+            resolved = queue.resolve(
+                request_id,
+                approved=approved,
+                decided_by=decided_by,
+                note=note,
+                proof=proof,
+            )
+            return (200, {"ok": True, "request": resolved.to_dict(include_proof=True)})
+        except ApprovalQueueError as exc:
+            return (
+                409,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+        except Exception as exc:
+            return (
+                400,
+                {"ok": False, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def _mint_queue_proof(self, request: Any) -> str:
+        """
+        Sign a proof scoped to exactly the action that was held.
+
+        Reconstructed from the stored action rather than re-parsed from text: the
+        scope hash has to match what the agent will present on its retry, and a
+        parse is a different function than the one that produced the request.
+        """
+        cfg = load_policy_config(self.settings.policy_path)
+        signed_cfg = cfg.confirmation.evidence.signed_proof
+        if not signed_cfg.enabled:
+            raise ValueError(
+                "confirmation.evidence.signed_proof.enabled=false in current policy — "
+                "an approval cannot mint a proof the engine would not accept"
+            )
+
+        action = _as_action_request(request.action)
+        excluded = {name for name in action.parameters if str(name).startswith("confirm_")}
+
+        keyring = load_approval_keyring(
+            keyring_env=signed_cfg.keyring_env,
+            fallback_env=signed_cfg.key_env,
+            fallback_kid=signed_cfg.active_kid,
+        )
+        secret = keyring.get(signed_cfg.active_kid, "").strip()
+        if not secret:
+            raise RuntimeError(
+                "missing approval signing key for active kid "
+                f"'{signed_cfg.active_kid}' in env vars: "
+                f"{signed_cfg.keyring_env} or {signed_cfg.key_env}"
+            )
+
+        proof, _expires_at = build_approval_proof(
+            secret=secret,
+            kid=signed_cfg.active_kid,
+            actor=request.actor,
+            action=action,
+            ttl_sec=signed_cfg.max_valid_for_sec,
+            exclude_params=excluded,
+        )
+        return proof
+
     def rollout(self, params: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
         """Phase measurement for the console — same data as `aetherya rollout report`."""
         try:
@@ -837,6 +1033,31 @@ class AetheryaAPI:
                     "ok": False,
                     "error_type": "MethodNotAllowed",
                     "error": "method not allowed for /v1/audit/verify",
+                    "allowed_methods": ["POST"],
+                },
+            )
+        if path == "/v1/approvals/resolve":
+            # Answering a held action mints a signed proof, so it belongs on the
+            # same trust boundary as confirmation/sign: admin key, localhost. The
+            # console key reads the queue; it does not authorise an irreversible
+            # action on someone's behalf.
+            if not self.settings.enable_approval_routes:
+                return (
+                    404,
+                    {
+                        "ok": False,
+                        "error_type": "NotFound",
+                        "error": f"route not found: {method} {path}",
+                    },
+                )
+            if method == "POST":
+                return self.resolve_approval(payload, headers=headers, client_ip=client_ip)
+            return (
+                405,
+                {
+                    "ok": False,
+                    "error_type": "MethodNotAllowed",
+                    "error": "method not allowed for /v1/approvals/resolve",
                     "allowed_methods": ["POST"],
                 },
             )
