@@ -123,6 +123,39 @@ def _as_action_request(value: Any) -> ActionRequest:
     )
 
 
+# Env vars holding secrets that a console field must never be allowed to carry.
+_SECRET_ENVS: tuple[str, ...] = (
+    "AETHERYA_CONSOLE_API_KEY",
+    "AETHERYA_APPROVALS_API_KEY",
+    "AETHERYA_CONFIRMATION_HMAC_KEY",
+    "AETHERYA_ATTESTATION_KEY",
+)
+
+
+def _reject_credentials(**fields: str) -> None:
+    """
+    Refuse free-text that contains one of this process's secrets.
+
+    The console asks for a key and then, in an identical prompt, for a reviewer
+    name — so pasting the key into the name is the obvious mistake, and it
+    writes the credential in plaintext into the audit trail, which is exported,
+    mirrored and archived. A field the operator types must never be able to put
+    a secret somewhere it cannot be taken back out of.
+    """
+    secrets = {
+        value
+        for env in _SECRET_ENVS
+        # Short values would match ordinary prose; a real key never is.
+        if len(value := os.getenv(env, "").strip()) >= 8
+    }
+    for name, supplied in fields.items():
+        if any(secret in supplied for secret in secrets):
+            raise ValueError(
+                f"{name} contains a credential — it would be written to the audit "
+                f"trail in plaintext. Use your own name, not the console key."
+            )
+
+
 def _header_value(headers: dict[str, Any] | None, key: str) -> str:
     if not headers:
         return ""
@@ -440,6 +473,9 @@ class AetheryaAPI:
             event_id = _as_non_empty_str(body.get("event_id"), field_name="event_id")
             verdict = _as_non_empty_str(body.get("verdict"), field_name="verdict")
             reviewer = _as_non_empty_str(body.get("reviewer"), field_name="reviewer")
+            note = str(body.get("note") or "")
+
+            _reject_credentials(reviewer=reviewer, note=note)
 
             state = self._state_of_event(event_id)
             if state is None:
@@ -451,7 +487,7 @@ class AetheryaAPI:
                 event_id,
                 verdict,
                 reviewer=reviewer,
-                note=str(body.get("note") or ""),
+                note=note,
             )
             return (200, {"ok": True, "review": review.to_dict()})
         except Exception as exc:

@@ -323,10 +323,23 @@ function verdictButtons(id){
   </div>`;
 }
 
+const REVIEWER = "aetherya.reviewer";
+
 async function submitReview(eventId, verdict){
-  const reviewer = localStorage.getItem("aetherya.reviewer") || prompt("Your name (recorded with the verdict):");
-  if(!reviewer) return;
-  localStorage.setItem("aetherya.reviewer", reviewer);
+  // Worded to be unmistakable next to the key prompt: an operator who has just
+  // pasted a key into one dialog will paste it into the next identical one,
+  // and that writes the credential into the audit trail. The server refuses it
+  // too — this only stops the round trip.
+  let reviewer = localStorage.getItem(REVIEWER);
+  while(!reviewer){
+    reviewer = (prompt("WHO ARE YOU? Your name — not the console key. It is recorded next to this verdict.") || "").trim();
+    if(!reviewer) return;
+    if(reviewer === consoleKey()){
+      alert("That is the console key, not a name. Enter the name to attribute this review to.");
+      reviewer = "";
+    }
+  }
+  localStorage.setItem(REVIEWER, reviewer);
 
   // A false positive is a claim the engine got it wrong. The note is what
   // tells you later which rule to narrow, so it is required, not optional.

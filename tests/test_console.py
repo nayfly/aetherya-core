@@ -702,3 +702,90 @@ def test_the_rendered_page_has_no_stray_newline_inside_a_js_string() -> None:
         for opener in ('alert("', 'prompt("', 'console.log("'):
             if opener in line:
                 assert line.count('"') % 2 == 0, f"unterminated string literal: {line.strip()}"
+
+
+# ---------------------------------------------------------------------------
+# A console field must not be able to write a secret into the audit trail
+# ---------------------------------------------------------------------------
+
+
+def test_the_console_key_cannot_be_recorded_as_a_reviewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Regression, hit for real: the console asks for a key and then, in an
+    identical prompt, for a name. Pasting the key into the name wrote the
+    credential in plaintext into the audit trail — which is exported, mirrored
+    and archived, so it cannot be taken back out.
+    """
+    monkeypatch.setenv("AETHERYA_CONSOLE_API_KEY", "local-dev-console-key-replace-me")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, body = _api_with_reviews(tmp_path, audit).record_review(
+        {
+            "event_id": event_id,
+            "verdict": "true_positive",
+            "reviewer": "local-dev-console-key-replace-me",
+        }
+    )
+    assert code == 400
+    assert "contains a credential" in body["error"]
+
+
+def test_a_credential_embedded_in_a_note_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AETHERYA_CONFIRMATION_HMAC_KEY", "super-secret-hmac-value")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, body = _api_with_reviews(tmp_path, audit).record_review(
+        {
+            "event_id": event_id,
+            "verdict": "false_positive",
+            "reviewer": "robert",
+            "note": "pasted by mistake: super-secret-hmac-value",
+        }
+    )
+    assert code == 400
+    assert "note contains a credential" in body["error"]
+
+
+def test_an_ordinary_name_is_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AETHERYA_CONSOLE_API_KEY", "local-dev-console-key-replace-me")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, _ = _api_with_reviews(tmp_path, audit).record_review(
+        {"event_id": event_id, "verdict": "true_positive", "reviewer": "robert"}
+    )
+    assert code == 200
+
+
+def test_a_short_secret_does_not_reject_ordinary_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A two-character key would match half the alphabet. Below a real key's
+    length the check would block legitimate reviews, which is worse than the
+    mistake it prevents.
+    """
+    monkeypatch.setenv("AETHERYA_CONSOLE_API_KEY", "ab")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, _ = _api_with_reviews(tmp_path, audit).record_review(
+        {"event_id": event_id, "verdict": "true_positive", "reviewer": "abigail"}
+    )
+    assert code == 200
+
+
+def test_the_console_refuses_to_send_the_key_as_a_name() -> None:
+    html = console_html()
+    assert "not the console key" in html
+    assert "reviewer === consoleKey()" in html
