@@ -16,3 +16,5 @@ audit/
 CLAUDE.md
 .claude/
 demo.cast
+# Local secrets for the compose stack. Never commit.
+.env

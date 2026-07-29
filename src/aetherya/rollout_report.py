@@ -102,8 +102,13 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
-def _load_events(path: Path) -> list[dict[str, Any]]:
+def _load_events(path: Path, *, allow_missing: bool = False) -> list[dict[str, Any]]:
     if not path.exists():
+        # A fresh deployment has recorded nothing yet. For the CLI that is a bad
+        # argument and should fail; for the console it is Tuesday, and raising
+        # makes a working install look broken on its first page load.
+        if allow_missing:
+            return []
         raise ValueError(f"audit file not found: {path}")
     events: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -126,11 +131,12 @@ def build_report(
     min_days: float = DEFAULT_MIN_DAYS,
     max_hard_deny_samples: int = 50,
     review_path: str | Path | None = None,
+    allow_missing_audit: bool = False,
 ) -> RolloutReport:
     path = Path(audit_path)
     phase = resolve_phase(current_phase)
     next_phase = PHASES[min(current_phase + 1, max(PHASES))]
-    events = _load_events(path)
+    events = _load_events(path, allow_missing=allow_missing_audit)
     recorded_reviews = ReviewStore(review_path).reviews() if review_path is not None else {}
 
     report = RolloutReport(audit_path=str(path), current_phase=phase.number)

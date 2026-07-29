@@ -550,6 +550,8 @@ class AetheryaAPI:
                 or DEFAULT_MIN_DECISIONS,
                 min_days=float(query.get("min_days", DEFAULT_MIN_DAYS) or 0) or DEFAULT_MIN_DAYS,
                 review_path=self.settings.review_path,
+                # The console must render on a deployment that has decided nothing yet.
+                allow_missing_audit=True,
             )
             return (200, {"ok": True, "report": report.to_dict()})
         except Exception as exc:

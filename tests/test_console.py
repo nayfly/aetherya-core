@@ -166,10 +166,15 @@ def test_rollout_phase_can_be_overridden(tmp_path: Path) -> None:
     assert body["report"]["current_phase"] == 2
 
 
-def test_rollout_reports_a_missing_audit_file(tmp_path: Path) -> None:
+def test_rollout_treats_a_missing_audit_file_as_an_empty_window(tmp_path: Path) -> None:
+    """
+    Changed deliberately: this used to 400. A fresh volume has no audit file, so
+    a healthy first boot rendered as an error in the console. The CLI still
+    fails on it — see test_the_cli_still_fails_on_a_missing_audit_file.
+    """
     code, body = _api(tmp_path, tmp_path / "nope.jsonl").rollout()
-    assert code == 400
-    assert "audit file not found" in body["error"]
+    assert code == 200
+    assert body["report"]["window"]["total_decisions"] == 0
 
 
 def test_rollout_fails_when_audit_is_disabled() -> None:
@@ -810,3 +815,26 @@ def test_a_locked_console_offers_a_way_back_in() -> None:
     assert "Enter console key" in html
     assert "the console key was rejected" in html.lower()
     assert "function unlock()" in html
+
+
+def test_the_console_renders_on_a_deployment_that_has_decided_nothing(tmp_path: Path) -> None:
+    """
+    Regression: a fresh volume has no audit file, and the report raised, so the
+    console showed an error on a perfectly healthy first boot. The feed already
+    treated this as empty rather than broken; the report now agrees.
+    """
+    api = _api_with_reviews(tmp_path, tmp_path / "not-yet.jsonl")
+    code, body = api.rollout()
+
+    assert code == 200
+    assert body["report"]["window"]["total_decisions"] == 0
+    assert body["report"]["hard_deny_events"] == []
+    assert api.decisions()[0] == 200
+
+
+def test_the_cli_still_fails_on_a_missing_audit_file(tmp_path: Path) -> None:
+    """Asking the CLI to measure a file that is not there is a bad argument."""
+    from aetherya.rollout_report import build_report
+
+    with pytest.raises(ValueError, match="audit file not found"):
+        build_report(tmp_path / "nope.jsonl")

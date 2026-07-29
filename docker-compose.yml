@@ -38,10 +38,14 @@ services:
       AETHERYA_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
       AETHERYA_CONFIRMATION_REPLAY_REDIS_URL: redis://redis:6379/1
 
+      # Secrets come from .env (see .env.example), not from whatever the shell
+      # running `docker compose` happens to have exported — otherwise rotating a
+      # key silently reverts to the default on the next rebuild by someone else.
+      #
       # Signs the audit chain. Replace before this is anything but a local demo:
       # without a real secret the attestation proves the file is self-consistent,
       # not that this service produced it.
-      AETHERYA_ATTESTATION_KEY: "local-dev-attestation-key-replace-me"
+      AETHERYA_ATTESTATION_KEY: "${AETHERYA_ATTESTATION_KEY:-local-dev-attestation-key-replace-me}"
 
       # Gates the operator console. Recording a hard-deny review requires this
       # to be set — the verdict is attributed to a named reviewer, so it has to
