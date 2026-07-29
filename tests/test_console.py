@@ -838,3 +838,42 @@ def test_the_cli_still_fails_on_a_missing_audit_file(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="audit file not found"):
         build_report(tmp_path / "nope.jsonl")
+
+
+def test_a_fresh_deployment_reports_an_intact_chain(tmp_path: Path) -> None:
+    """
+    Regression: `verify_audit_file` raises on a missing file, so `chain_intact`
+    said "investigate before advancing" on a deployment that had decided
+    nothing. A chain of zero events is vacuously intact — there is nothing that
+    could be inconsistent, and nothing to investigate.
+    """
+    report = _api_with_reviews(tmp_path, tmp_path / "not-yet.jsonl").rollout()[1]["report"]
+    chain = next(c for c in report["criteria"] if c["name"] == "chain_intact")
+
+    assert chain["passed"] is True
+    assert report["chain"]["detail"] is None
+
+
+def test_a_real_chain_break_is_still_reported(tmp_path: Path) -> None:
+    """The relaxation above must not swallow a genuine tampering finding."""
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "allow"), ("b", "allow")])
+    lines = audit.read_text(encoding="utf-8").splitlines()
+    tampered = json.loads(lines[0])
+    tampered["actor"] = "someone-else"
+    audit.write_text(
+        json.dumps(tampered) + "\n" + lines[1] + "\n",
+        encoding="utf-8",
+    )
+
+    report = _api_with_reviews(tmp_path, audit).rollout()[1]["report"]
+    chain = next(c for c in report["criteria"] if c["name"] == "chain_intact")
+    assert chain["passed"] is False
+
+
+def test_the_empty_feed_says_what_to_do_about_it() -> None:
+    """An empty state that only says "empty" leaves you guessing whether the
+    service is broken or idle."""
+    html = console_html()
+    assert "waiting for traffic" in html
+    assert "aetherya decide" in html

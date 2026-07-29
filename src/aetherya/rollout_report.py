@@ -205,16 +205,23 @@ def build_report(
         report.last_event = timestamps[-1].isoformat()
         report.window_days = (timestamps[-1] - timestamps[0]).total_seconds() / 86400.0
 
-    # A malformed line or an empty file makes `verify_audit_file` raise. Both are
-    # findings an operator must see before advancing a phase — not reasons for
-    # the report to crash, and certainly not something to skip silently.
-    try:
-        verification = verify_audit_file(str(path), require_chain=True)
-        report.chain_errors = sum(1 for r in verification if not r.verification.valid)
-        report.chain_valid = report.chain_errors == 0
-    except ValueError as exc:
-        report.chain_valid = False
-        report.chain_error_detail = str(exc)
+    # A chain with no events is vacuously intact — there is nothing that could
+    # be inconsistent. Reporting "investigate before advancing" on a deployment
+    # that has not decided anything yet sends an operator looking for damage
+    # that does not exist.
+    if not events and allow_missing_audit:
+        report.chain_valid = True
+    else:
+        # A malformed line or an empty file makes `verify_audit_file` raise. Both
+        # are findings an operator must see before advancing a phase — not
+        # reasons for the report to crash, nor something to skip silently.
+        try:
+            verification = verify_audit_file(str(path), require_chain=True)
+            report.chain_errors = sum(1 for r in verification if not r.verification.valid)
+            report.chain_valid = report.chain_errors == 0
+        except ValueError as exc:
+            report.chain_valid = False
+            report.chain_error_detail = str(exc)
 
     report.criteria = _evaluate_criteria(report, min_decisions=min_decisions, min_days=min_days)
     return report

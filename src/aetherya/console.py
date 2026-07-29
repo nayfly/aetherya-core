@@ -246,8 +246,15 @@ async function loadFeed(){
   const tbody = document.getElementById("feed");
 
   if(!rows.length){
+    // An empty state that only says "empty" leaves you guessing whether the
+    // service is broken or simply idle. Say which, and how to change it.
     tbody.innerHTML = `<tr><td colspan="6" class="empty">
-      no decisions recorded yet — point an agent at this service</td></tr>`;
+      No decisions recorded yet — the engine is running and waiting for traffic.<br>
+      <span class="mono" style="display:inline-block;margin-top:8px">
+      aetherya decide "rm -rf /" --actor robert</span><br>
+      <span style="display:inline-block;margin-top:6px">
+      or point an agent at the gateway — see docs/gateway-openclaw.md</span>
+      </td></tr>`;
     document.getElementById("bar").innerHTML = "";
     document.getElementById("legend").innerHTML = "";
     return;
