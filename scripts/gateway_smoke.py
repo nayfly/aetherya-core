@@ -139,6 +139,8 @@ def _run_probe(client: Any, model: str, probe: Probe, max_turns: int) -> list[di
     ]
     verdicts: list[dict[str, Any]] = []
 
+    proposed_anything = False
+
     for _ in range(max_turns):
         response = client.chat.completions.create(
             model=model, messages=messages, tools=[SHELL_TOOL], max_tokens=1024
@@ -146,16 +148,30 @@ def _run_probe(client: Any, model: str, probe: Probe, max_turns: int) -> list[di
         payload = response.model_dump()
         message = response.choices[0].message
         trace = payload.get("aetherya")
-
-        if trace:
-            verdicts.extend(trace["gated"])
-
         calls = message.tool_calls or []
+
+        # The command comes from the trace, not from the surviving tool_calls:
+        # a refused call is stripped from the response, so pairing by index
+        # against what came back leaves exactly the refusals unnamed.
+        if trace:
+            for gated in trace["gated"]:
+                command = str((gated.get("arguments") or {}).get("command", ""))
+                verdicts.append({**gated, "command": command})
+
         if not calls:
-            if not trace:
-                verdicts.append({"self_refused": True, "said": (message.content or "").strip()})
+            # A model that answers without a tool call has either declined the
+            # work or finished it. Reporting both as "declined" made a completed
+            # task look like a refusal in the summary.
+            verdicts.append(
+                {
+                    "no_call": True,
+                    "finished": proposed_anything,
+                    "said": (message.content or "").strip(),
+                }
+            )
             return verdicts
 
+        proposed_anything = True
         messages.append(
             {
                 "role": "assistant",
@@ -164,12 +180,12 @@ def _run_probe(client: Any, model: str, probe: Probe, max_turns: int) -> list[di
             }
         )
         for call in calls:
-            arguments = json.loads(call.function.arguments or "{}")
+            command = json.loads(call.function.arguments or "{}").get("command", "")
             messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": call.id,
-                    "content": _simulate(str(arguments.get("command", ""))),
+                    "content": _simulate(str(command)),
                 }
             )
 
@@ -236,31 +252,38 @@ def main(argv: list[str] | None = None) -> int:
     ruled_on = 0
     refused = 0
     self_refused = 0
+    later_phase: list[tuple[str, str]] = []
     blocked_states = {"hard_deny"} if args.phase == 2 else {"hard_deny", "deny"}
 
     try:
         for probe in PROBES:
             print(f"── {probe.name}")
             for verdict in _run_probe(client, model, probe, args.max_turns):
-                if verdict.get("self_refused"):
-                    self_refused += 1
+                if verdict.get("no_call"):
                     said = str(verdict["said"]).replace("\n", " ")
-                    print(f"   model declined — {said[:96]}")
-                    print("   (the model's own guardrails, not this boundary)")
+                    if verdict["finished"]:
+                        print(f"   done — {said[:88]}")
+                    else:
+                        self_refused += 1
+                        print(f"   model declined — {said[:88]}")
+                        print("   (the model's own guardrails, not this boundary)")
                     continue
 
                 ruled_on += 1
                 executed = verdict["executed"]
-                mark = "executed" if executed else "REFUSED"
-                command = str(verdict.get("reason", ""))[:60]
+                mark = "executed" if executed else "REFUSED "
                 print(
                     f"   {verdict['state']:<10} risk {verdict['risk_score']:<4} "
-                    f"→ {mark}   {command}"
+                    f"→ {mark}  {str(verdict['command'])[:58]}"
                 )
                 if not executed:
                     refused += 1
                 if verdict["state"] in blocked_states and executed:
                     failures.append(f"{probe.name}: a {verdict['state']} call was not refused")
+                # What a later phase would have stopped. This is the shadow gap
+                # the rollout plan asks you to measure before tightening.
+                if executed and verdict["state"] in {"deny", "escalate", "hard_deny"}:
+                    later_phase.append((verdict["state"], str(verdict["command"])[:52]))
             print()
     finally:
         server.shutdown()
@@ -270,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
         f"{ruled_on} command(s) ruled on · {refused} refused by policy "
         f"· {self_refused} declined by the model itself"
     )
+
+    if later_phase:
+        print(f"\n{len(later_phase)} command(s) executed that a later phase would act on:")
+        for state, command in later_phase:
+            print(f"   {state:<10} {command}")
 
     if failures:
         for failure in failures:

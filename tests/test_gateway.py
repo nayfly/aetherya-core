@@ -755,3 +755,18 @@ def test_the_same_escalation_executes_in_phase_2() -> None:
     assert result["aetherya"]["gated"][0]["state"] == "escalate"
     assert result["choices"][0]["message"]["tool_calls"]
     assert result["aetherya"]["shadow_gap"] == 1
+
+
+def test_the_trace_names_what_was_refused() -> None:
+    """
+    A refused call is stripped from the response, so the trace is the only
+    surviving record of what the model proposed. Without the arguments it names
+    a verdict but not the thing that earned it, which an operator cannot act on.
+    """
+    upstream = _FakeOpenAI(_completion([_call("shell", {"command": "rm -rf /"})]))
+    result = _gateway(upstream, phase=2).complete({"messages": []})
+
+    assert "tool_calls" not in result["choices"][0]["message"]
+    gated = result["aetherya"]["gated"][0]
+    assert gated["arguments"] == {"command": "rm -rf /"}
+    assert gated["executed"] is False
