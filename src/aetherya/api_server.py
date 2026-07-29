@@ -36,6 +36,11 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
         body = html.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        # The console ships inside the engine, so its markup and its JS change
+        # with every upgrade while the URL stays the same. Cached, an operator
+        # keeps running the previous version against the new API and sees a page
+        # that hangs rather than one that is out of date.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

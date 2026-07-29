@@ -99,6 +99,10 @@ def console_html() -> str:
   .rv.tp{color:var(--allow)} .rv.fp{color:var(--hard)}
   .rv .note{font-weight:400;margin-top:3px}
   .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:.85rem}
+  .unlock{margin-top:12px;border:1px solid var(--line);background:var(--panel);
+          color:var(--fg);border-radius:6px;padding:7px 14px;cursor:pointer;
+          font-size:.78rem;font-family:inherit}
+  .unlock:hover{border-color:var(--allow);color:var(--allow)}
   .bar{display:flex;height:7px;border-radius:4px;overflow:hidden;margin:10px 0 6px;
        background:var(--panel-2)}
   .bar i{display:block}
@@ -166,8 +170,28 @@ const clip = (s,n) => { s = String(s ?? ""); return s.length > n ? s.slice(0,n)+
 const time = t => { if(!t) return "—"; try { return new Date(t).toLocaleString(); }
                     catch(e){ return t; } };
 
+// One place decides how the key travels. When AETHERYA_CONSOLE_API_KEY is set
+// it gates the reads too, so a page that only sent it on writes would render
+// empty against a configured deployment — which is the normal deployment.
+const KEY = "aetherya.consoleKey";
+const consoleKey = () => localStorage.getItem(KEY) || "";
+
+function askForKey(){
+  const entered = prompt("Console key (AETHERYA_CONSOLE_API_KEY):");
+  if(entered){ localStorage.setItem(KEY, entered); return true; }
+  return false;
+}
+
+class Unauthorized extends Error {}
+
+// Never prompts. Asking here means every failed load asks again, and with a
+// polling refresh behind it a wrong key turns into a dialog every few seconds
+// that cannot be escaped. One place decides when to ask: refresh().
 async function get(url){
-  const r = await fetch(url, {headers:{"Accept":"application/json"}});
+  const r = await fetch(url, {headers:{
+    "Accept":"application/json", "X-AETHERYA-Console-Key": consoleKey()
+  }});
+  if(r.status === 401) throw new Unauthorized();
   return await r.json();
 }
 
@@ -222,8 +246,15 @@ async function loadFeed(){
   const tbody = document.getElementById("feed");
 
   if(!rows.length){
+    // An empty state that only says "empty" leaves you guessing whether the
+    // service is broken or simply idle. Say which, and how to change it.
     tbody.innerHTML = `<tr><td colspan="6" class="empty">
-      no decisions recorded yet — point an agent at this service</td></tr>`;
+      No decisions recorded yet — the engine is running and waiting for traffic.<br>
+      <span class="mono" style="display:inline-block;margin-top:8px">
+      aetherya decide "rm -rf /" --actor robert</span><br>
+      <span style="display:inline-block;margin-top:6px">
+      or point an agent at the gateway — see docs/gateway-openclaw.md</span>
+      </td></tr>`;
     document.getElementById("bar").innerHTML = "";
     document.getElementById("legend").innerHTML = "";
     return;
@@ -305,10 +336,23 @@ function verdictButtons(id){
   </div>`;
 }
 
+const REVIEWER = "aetherya.reviewer";
+
 async function submitReview(eventId, verdict){
-  const reviewer = localStorage.getItem("aetherya.reviewer") || prompt("Your name (recorded with the verdict):");
-  if(!reviewer) return;
-  localStorage.setItem("aetherya.reviewer", reviewer);
+  // Worded to be unmistakable next to the key prompt: an operator who has just
+  // pasted a key into one dialog will paste it into the next identical one,
+  // and that writes the credential into the audit trail. The server refuses it
+  // too — this only stops the round trip.
+  let reviewer = localStorage.getItem(REVIEWER);
+  while(!reviewer){
+    reviewer = (prompt("WHO ARE YOU? Your name — not the console key. It is recorded next to this verdict.") || "").trim();
+    if(!reviewer) return;
+    if(reviewer === consoleKey()){
+      alert("That is the console key, not a name. Enter the name to attribute this review to.");
+      reviewer = "";
+    }
+  }
+  localStorage.setItem(REVIEWER, reviewer);
 
   // A false positive is a claim the engine got it wrong. The note is what
   // tells you later which rule to narrow, so it is required, not optional.
@@ -318,26 +362,58 @@ async function submitReview(eventId, verdict){
     if(!note.trim()){ return; }
   }
 
-  const key = localStorage.getItem("aetherya.consoleKey") || "";
   const r = await fetch("/v1/reviews", {
     method: "POST",
-    headers: {"Content-Type":"application/json", "X-AETHERYA-Console-Key": key},
+    headers: {"Content-Type":"application/json", "X-AETHERYA-Console-Key": consoleKey()},
     body: JSON.stringify({event_id: eventId, verdict, reviewer, note})
   });
   const body = await r.json().catch(() => ({}));
   if(!r.ok){
-    if(r.status === 401){
-      const entered = prompt("Console key (AETHERYA_CONSOLE_API_KEY):");
-      if(entered){ localStorage.setItem("aetherya.consoleKey", entered); return submitReview(eventId, verdict); }
-    }
-    alert("Could not record the review:\n\n" + (body.error || r.status));
+    if(r.status === 401 && askForKey()) return submitReview(eventId, verdict);
+    alert(`Could not record the review:
+
+${body.error || r.status}`);
     return;
   }
   loadRollout();
 }
 
-function refresh(){ loadStatus(); loadFeed(); loadRollout(); }
+// Polling is paused while locked. Without this a wrong key re-prompts on every
+// tick; with it the page waits for the operator instead of nagging.
+let paused = false;
+
+function locked(unauthorized){
+  const text = unauthorized
+    ? "Locked — the console key was rejected."
+    : "Could not reach the engine.";
+  const panel = `<div class="empty">${text}<br>
+    <button id="unlock" class="unlock">Enter console key</button></div>`;
+  document.getElementById("criteria").innerHTML = panel;
+  document.getElementById("review").innerHTML = "";
+  document.getElementById("feed").innerHTML =
+    `<tr><td colspan="6" class="empty">${text}</td></tr>`;
+  const button = document.getElementById("unlock");
+  if(button) button.onclick = unlock;
+}
+
+function unlock(){
+  if(!askForKey()) return;
+  paused = false;
+  refresh();
+}
+
+async function refresh(){
+  if(paused) return;
+  try {
+    await loadStatus(); await loadFeed(); await loadRollout();
+  } catch(e){
+    paused = true;
+    locked(e instanceof Unauthorized);
+  }
+}
+
 renderFilters();
+if(!consoleKey()) askForKey();
 refresh();
 setInterval(refresh, 10000);
 </script>

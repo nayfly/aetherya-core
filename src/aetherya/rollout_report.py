@@ -102,8 +102,13 @@ def _parse_ts(value: Any) -> datetime | None:
         return None
 
 
-def _load_events(path: Path) -> list[dict[str, Any]]:
+def _load_events(path: Path, *, allow_missing: bool = False) -> list[dict[str, Any]]:
     if not path.exists():
+        # A fresh deployment has recorded nothing yet. For the CLI that is a bad
+        # argument and should fail; for the console it is Tuesday, and raising
+        # makes a working install look broken on its first page load.
+        if allow_missing:
+            return []
         raise ValueError(f"audit file not found: {path}")
     events: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -126,11 +131,12 @@ def build_report(
     min_days: float = DEFAULT_MIN_DAYS,
     max_hard_deny_samples: int = 50,
     review_path: str | Path | None = None,
+    allow_missing_audit: bool = False,
 ) -> RolloutReport:
     path = Path(audit_path)
     phase = resolve_phase(current_phase)
     next_phase = PHASES[min(current_phase + 1, max(PHASES))]
-    events = _load_events(path)
+    events = _load_events(path, allow_missing=allow_missing_audit)
     recorded_reviews = ReviewStore(review_path).reviews() if review_path is not None else {}
 
     report = RolloutReport(audit_path=str(path), current_phase=phase.number)
@@ -199,16 +205,23 @@ def build_report(
         report.last_event = timestamps[-1].isoformat()
         report.window_days = (timestamps[-1] - timestamps[0]).total_seconds() / 86400.0
 
-    # A malformed line or an empty file makes `verify_audit_file` raise. Both are
-    # findings an operator must see before advancing a phase — not reasons for
-    # the report to crash, and certainly not something to skip silently.
-    try:
-        verification = verify_audit_file(str(path), require_chain=True)
-        report.chain_errors = sum(1 for r in verification if not r.verification.valid)
-        report.chain_valid = report.chain_errors == 0
-    except ValueError as exc:
-        report.chain_valid = False
-        report.chain_error_detail = str(exc)
+    # A chain with no events is vacuously intact — there is nothing that could
+    # be inconsistent. Reporting "investigate before advancing" on a deployment
+    # that has not decided anything yet sends an operator looking for damage
+    # that does not exist.
+    if not events and allow_missing_audit:
+        report.chain_valid = True
+    else:
+        # A malformed line or an empty file makes `verify_audit_file` raise. Both
+        # are findings an operator must see before advancing a phase — not
+        # reasons for the report to crash, nor something to skip silently.
+        try:
+            verification = verify_audit_file(str(path), require_chain=True)
+            report.chain_errors = sum(1 for r in verification if not r.verification.valid)
+            report.chain_valid = report.chain_errors == 0
+        except ValueError as exc:
+            report.chain_valid = False
+            report.chain_error_detail = str(exc)
 
     report.criteria = _evaluate_criteria(report, min_decisions=min_decisions, min_days=min_days)
     return report

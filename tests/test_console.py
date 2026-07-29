@@ -166,10 +166,15 @@ def test_rollout_phase_can_be_overridden(tmp_path: Path) -> None:
     assert body["report"]["current_phase"] == 2
 
 
-def test_rollout_reports_a_missing_audit_file(tmp_path: Path) -> None:
+def test_rollout_treats_a_missing_audit_file_as_an_empty_window(tmp_path: Path) -> None:
+    """
+    Changed deliberately: this used to 400. A fresh volume has no audit file, so
+    a healthy first boot rendered as an error in the console. The CLI still
+    fails on it — see test_the_cli_still_fails_on_a_missing_audit_file.
+    """
     code, body = _api(tmp_path, tmp_path / "nope.jsonl").rollout()
-    assert code == 400
-    assert "audit file not found" in body["error"]
+    assert code == 200
+    assert body["report"]["window"]["total_decisions"] == 0
 
 
 def test_rollout_fails_when_audit_is_disabled() -> None:
@@ -614,3 +619,261 @@ def test_the_review_route_fails_when_the_api_is_not_configured() -> None:
     handler = _Bare()
     handler._handle_request()  # noqa: SLF001
     assert handler.sent[0][0] == 500
+
+
+def test_the_console_sends_the_key_on_reads_too() -> None:
+    """
+    Regression: the key was only sent on writes. With AETHERYA_CONSOLE_API_KEY
+    set — the normal deployment — every read 401'd and the page rendered empty
+    while the server looked healthy.
+    """
+    html = console_html()
+    get_fn = html.split("async function get(url")[1].split("}")[0]
+    assert "X-AETHERYA-Console-Key" in get_fn
+
+
+def test_the_console_reports_being_locked_rather_than_hanging() -> None:
+    """A page stuck on `loading…` sends you to the server logs for nothing."""
+    html = console_html()
+    assert "Locked — the console key was rejected." in html
+    assert "function locked(" in html
+
+
+def test_the_console_reads_the_key_from_one_place() -> None:
+    """Two copies of the key drift; the write path would authenticate and the
+    read path would not, which is exactly the bug above."""
+    assert console_html().count("localStorage.getItem(KEY)") == 1
+
+
+def test_the_console_page_is_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Regression: the page ships inside the engine and changes with every upgrade
+    while its URL does not. Cached, an operator runs the previous console
+    against the new API and gets a page that hangs instead of one that looks
+    out of date.
+    """
+    import urllib.request
+
+    server = _server(tmp_path, monkeypatch)
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+            f"http://127.0.0.1:{server.server_port}/", timeout=5
+        ) as response:
+            assert "no-store" in response.headers.get("Cache-Control", "")
+    finally:
+        server.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The page has to parse, not merely contain the right substrings
+# ---------------------------------------------------------------------------
+
+
+def test_the_console_template_contains_no_python_escape_sequences() -> None:
+    r"""
+    Regression, and the reason every other test here missed it.
+
+    The console's JS lives inside a Python string literal. A `\n` written for
+    JavaScript is consumed by Python and emitted as a real newline, which splits
+    the JS string it was in and stops the *entire script* from parsing. Nothing
+    on the page runs, every panel sits on "loading…", and the server reports
+    healthy the whole time — so it reads as a server or cache problem.
+
+    Every other console test asserted substrings, which all still matched.
+    Checking the source is what catches this: any of these escapes appearing
+    literally in the template is meant for the browser and will never reach it.
+    Use a JS template literal with a real line break instead.
+    """
+    source = Path("src/aetherya/console.py").read_text(encoding="utf-8")
+    template = source[source.index('"""') :]
+
+    offenders = [
+        (line_no, line.strip())
+        for line_no, line in enumerate(template.splitlines(), start=1)
+        for escape in ("\\n", "\\t", "\\r", "\\x")
+        if escape in line
+    ]
+    assert offenders == [], f"Python escape sequences in the JS template: {offenders}"
+
+
+def test_the_rendered_page_has_no_stray_newline_inside_a_js_string() -> None:
+    """
+    The observable form of the bug above: `alert("...` left open at end of line.
+    Asserted against the rendered output, so it holds however the template is
+    later refactored.
+    """
+    js = console_html().split("<script>")[1].split("</script>")[0]
+    for line in js.splitlines():
+        for opener in ('alert("', 'prompt("', 'console.log("'):
+            if opener in line:
+                assert line.count('"') % 2 == 0, f"unterminated string literal: {line.strip()}"
+
+
+# ---------------------------------------------------------------------------
+# A console field must not be able to write a secret into the audit trail
+# ---------------------------------------------------------------------------
+
+
+def test_the_console_key_cannot_be_recorded_as_a_reviewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    Regression, hit for real: the console asks for a key and then, in an
+    identical prompt, for a name. Pasting the key into the name wrote the
+    credential in plaintext into the audit trail — which is exported, mirrored
+    and archived, so it cannot be taken back out.
+    """
+    monkeypatch.setenv("AETHERYA_CONSOLE_API_KEY", "local-dev-console-key-replace-me")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, body = _api_with_reviews(tmp_path, audit).record_review(
+        {
+            "event_id": event_id,
+            "verdict": "true_positive",
+            "reviewer": "local-dev-console-key-replace-me",
+        }
+    )
+    assert code == 400
+    assert "contains a credential" in body["error"]
+
+
+def test_a_credential_embedded_in_a_note_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AETHERYA_CONFIRMATION_HMAC_KEY", "super-secret-hmac-value")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, body = _api_with_reviews(tmp_path, audit).record_review(
+        {
+            "event_id": event_id,
+            "verdict": "false_positive",
+            "reviewer": "robert",
+            "note": "pasted by mistake: super-secret-hmac-value",
+        }
+    )
+    assert code == 400
+    assert "note contains a credential" in body["error"]
+
+
+def test_an_ordinary_name_is_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AETHERYA_CONSOLE_API_KEY", "local-dev-console-key-replace-me")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, _ = _api_with_reviews(tmp_path, audit).record_review(
+        {"event_id": event_id, "verdict": "true_positive", "reviewer": "robert"}
+    )
+    assert code == 200
+
+
+def test_a_short_secret_does_not_reject_ordinary_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A two-character key would match half the alphabet. Below a real key's
+    length the check would block legitimate reviews, which is worse than the
+    mistake it prevents.
+    """
+    monkeypatch.setenv("AETHERYA_CONSOLE_API_KEY", "ab")
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "hard_deny")])
+    event_id = _hard_deny_ids(audit)[0]
+
+    code, _ = _api_with_reviews(tmp_path, audit).record_review(
+        {"event_id": event_id, "verdict": "true_positive", "reviewer": "abigail"}
+    )
+    assert code == 200
+
+
+def test_the_console_refuses_to_send_the_key_as_a_name() -> None:
+    html = console_html()
+    assert "not the console key" in html
+    assert "reviewer === consoleKey()" in html
+
+
+def test_a_rejected_key_does_not_reprompt_on_every_poll() -> None:
+    """
+    Regression: `get()` prompted on 401 and the page polls every 10s, so a wrong
+    key produced an inescapable dialog every few seconds. Only refresh() decides
+    when to ask, and it pauses polling until the operator answers.
+    """
+    html = console_html()
+    get_body = html.split("async function get(url)")[1].split("\n}")[0]
+    assert "prompt(" not in get_body
+    assert "if(paused) return;" in html
+    assert "paused = true;" in html
+
+
+def test_a_locked_console_offers_a_way_back_in() -> None:
+    """A dead end with no button is indistinguishable from a broken page."""
+    html = console_html()
+    assert "Enter console key" in html
+    assert "the console key was rejected" in html.lower()
+    assert "function unlock()" in html
+
+
+def test_the_console_renders_on_a_deployment_that_has_decided_nothing(tmp_path: Path) -> None:
+    """
+    Regression: a fresh volume has no audit file, and the report raised, so the
+    console showed an error on a perfectly healthy first boot. The feed already
+    treated this as empty rather than broken; the report now agrees.
+    """
+    api = _api_with_reviews(tmp_path, tmp_path / "not-yet.jsonl")
+    code, body = api.rollout()
+
+    assert code == 200
+    assert body["report"]["window"]["total_decisions"] == 0
+    assert body["report"]["hard_deny_events"] == []
+    assert api.decisions()[0] == 200
+
+
+def test_the_cli_still_fails_on_a_missing_audit_file(tmp_path: Path) -> None:
+    """Asking the CLI to measure a file that is not there is a bad argument."""
+    from aetherya.rollout_report import build_report
+
+    with pytest.raises(ValueError, match="audit file not found"):
+        build_report(tmp_path / "nope.jsonl")
+
+
+def test_a_fresh_deployment_reports_an_intact_chain(tmp_path: Path) -> None:
+    """
+    Regression: `verify_audit_file` raises on a missing file, so `chain_intact`
+    said "investigate before advancing" on a deployment that had decided
+    nothing. A chain of zero events is vacuously intact — there is nothing that
+    could be inconsistent, and nothing to investigate.
+    """
+    report = _api_with_reviews(tmp_path, tmp_path / "not-yet.jsonl").rollout()[1]["report"]
+    chain = next(c for c in report["criteria"] if c["name"] == "chain_intact")
+
+    assert chain["passed"] is True
+    assert report["chain"]["detail"] is None
+
+
+def test_a_real_chain_break_is_still_reported(tmp_path: Path) -> None:
+    """The relaxation above must not swallow a genuine tampering finding."""
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "allow"), ("b", "allow")])
+    lines = audit.read_text(encoding="utf-8").splitlines()
+    tampered = json.loads(lines[0])
+    tampered["actor"] = "someone-else"
+    audit.write_text(
+        json.dumps(tampered) + "\n" + lines[1] + "\n",
+        encoding="utf-8",
+    )
+
+    report = _api_with_reviews(tmp_path, audit).rollout()[1]["report"]
+    chain = next(c for c in report["criteria"] if c["name"] == "chain_intact")
+    assert chain["passed"] is False
+
+
+def test_the_empty_feed_says_what_to_do_about_it() -> None:
+    """An empty state that only says "empty" leaves you guessing whether the
+    service is broken or idle."""
+    html = console_html()
+    assert "waiting for traffic" in html
+    assert "aetherya decide" in html
