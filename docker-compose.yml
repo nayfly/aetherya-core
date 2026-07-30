@@ -36,32 +36,18 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # Secrets come from the file, never from `${VAR}` interpolation. Compose
+    # gives the invoking shell precedence over .env, so an exported variable
+    # silently wins over the file — which is how a rotated console key kept
+    # reverting to an older value and locked the console out with no
+    # indication that two different keys were in play.
+    env_file:
+      - .env
     environment:
       # Shared rate-limit state. With the in-process backend, N replicas mean
       # N x the configured limit — see docs/security-model.md.
       AETHERYA_RATE_LIMIT_REDIS_URL: redis://redis:6379/0
       AETHERYA_CONFIRMATION_REPLAY_REDIS_URL: redis://redis:6379/1
-
-      # Secrets come from .env (see .env.example), not from whatever the shell
-      # running `docker compose` happens to have exported — otherwise rotating a
-      # key silently reverts to the default on the next rebuild by someone else.
-      #
-      # Signs the audit chain. Replace before this is anything but a local demo:
-      # without a real secret the attestation proves the file is self-consistent,
-      # not that this service produced it.
-      AETHERYA_ATTESTATION_KEY: "${AETHERYA_ATTESTATION_KEY:-local-dev-attestation-key-replace-me}"
-
-      # Gates the operator console. Recording a hard-deny review requires this
-      # to be set — the verdict is attributed to a named reviewer, so it has to
-      # be authenticated. Reads are gated by it too once it exists.
-      AETHERYA_CONSOLE_API_KEY: "${AETHERYA_CONSOLE_API_KEY:-local-dev-console-key-replace-me}"
-
-      # Answering a held action. Both are required for the approval queue to do
-      # anything: the first authorises the operator to answer, the second signs
-      # the proof that unblocks the agent. Without them Approve fails at the
-      # click rather than at deploy time, which is the wrong moment to find out.
-      AETHERYA_APPROVALS_API_KEY: "${AETHERYA_APPROVALS_API_KEY:-}"
-      AETHERYA_CONFIRMATION_HMAC_KEY: "${AETHERYA_CONFIRMATION_HMAC_KEY:-}"
 
       # Pin the policy so a replica refuses to start under an unintended one.
       # Get the value with: aetherya policy fingerprint --json
@@ -109,10 +95,11 @@ services:
     depends_on:
       aetherya:
         condition: service_healthy
-    environment:
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      AETHERYA_ATTESTATION_KEY: "${AETHERYA_ATTESTATION_KEY:-local-dev-attestation-key-replace-me}"
+    # Same reasoning as above. The provider key lives in its own file so the
+    # decision service never receives a credential it has no use for.
+    env_file:
+      - .env
+      - .env.provider
     volumes:
       - audit-data:/app/audit
       - ./config:/app/config:ro
