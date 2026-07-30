@@ -464,3 +464,60 @@ def test_the_default_provider_is_anthropic_on_opus_5(
 
 def test_the_upstream_error_type_is_exported() -> None:
     assert issubclass(UpstreamError, RuntimeError)
+
+
+def test_health_is_not_ok_without_an_upstream_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    A gateway with no credential answers every completion with a 502. Reporting
+    it healthy is a lie a readiness probe believes, and the container sits in
+    rotation serving nothing.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    gateway = AetheryaGateway(
+        GatewaySettings(provider="anthropic", model="claude-opus-5", actor="robert"),
+        constitution=Constitution([], use_semantic=False),
+        cfg=load_policy_config(POLICY),
+    )
+    srv = build_gateway_server("127.0.0.1", 0, gateway=gateway)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        payload = json.loads(_request(srv, "/health")[1])
+        assert payload["ok"] is False
+        assert payload["upstream_key_present"] is False
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_health_is_ok_once_the_key_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    gateway = AetheryaGateway(
+        GatewaySettings(provider="anthropic", model="claude-opus-5", actor="robert"),
+        constitution=Constitution([], use_semantic=False),
+        cfg=load_policy_config(POLICY),
+    )
+    srv = build_gateway_server("127.0.0.1", 0, gateway=gateway)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        payload = json.loads(_request(srv, "/health")[1])
+        assert payload["ok"] is True
+        assert payload["upstream_key_present"] is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_an_unknown_provider_reports_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defensive: an unsupported provider has no key env to look up."""
+    gateway = AetheryaGateway(
+        GatewaySettings(provider="cohere", model="x", actor="robert"),
+        constitution=Constitution([], use_semantic=False),
+        cfg=load_policy_config(POLICY),
+    )
+    srv = build_gateway_server("127.0.0.1", 0, gateway=gateway)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        assert json.loads(_request(srv, "/health")[1])["upstream_key_present"] is False
+    finally:
+        srv.shutdown()
+        srv.server_close()

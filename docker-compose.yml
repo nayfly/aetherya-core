@@ -114,6 +114,21 @@ services:
       - --actor=${AETHERYA_GATEWAY_ACTOR:-robert}
       - --policy-path=config/policy.docker.yaml
       - --audit-path=audit/decisions.jsonl
+    # The image's healthcheck probes 8080 and asserts fields only the decision
+    # service reports, so the gateway inherits a check it can never pass.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import json, urllib.request
+          d = json.load(urllib.request.urlopen("http://127.0.0.1:8090/health", timeout=4))
+          raise SystemExit(0 if d.get("ok") and d.get("upstream_key_present") else 1)
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     restart: unless-stopped
 
 volumes:
