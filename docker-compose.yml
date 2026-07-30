@@ -14,7 +14,10 @@ services:
     image: redis:7-alpine
     container_name: aetherya-redis
     ports:
-      - "6379:6379"
+      # Loopback only. This holds the confirmation replay store, so network
+      # access to it means deleting replay records and reusing approval proofs
+      # — the single-use guarantee lives in here, not just in the signature.
+      - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data

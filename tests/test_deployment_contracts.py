@@ -697,3 +697,23 @@ def test_the_published_ports_are_loopback_only() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     assert '"127.0.0.1:8080:8080"' in compose
     assert '"127.0.0.1:8090:8090"' in compose
+
+
+def test_redis_is_not_published_to_the_network() -> None:
+    """
+    Regression, found by an agent reading its own deployment: redis was on
+    0.0.0.0 with no auth. It holds the confirmation replay store, so reachability
+    means an attacker can delete replay records and reuse an approval proof —
+    the single-use guarantee lives there, not only in the signature.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:6379:6379"' in compose
+    assert '"6379:6379"' not in compose
+
+
+def test_no_service_publishes_on_all_interfaces() -> None:
+    """One rule for the whole stack rather than three ports to remember."""
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    for name, service in compose["services"].items():
+        for mapping in service.get("ports", []):
+            assert str(mapping).startswith("127.0.0.1:"), f"{name} publishes {mapping} publicly"
