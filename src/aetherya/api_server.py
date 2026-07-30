@@ -110,7 +110,13 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
         # Read-only console data. Gated behind AETHERYA_CONSOLE_API_KEY when it
         # is set; open otherwise, like the rest of the decision profile. This
         # view exposes every recorded action, so the port must not be public.
-        if method == "GET" and path in {"/v1/decisions", "/v1/rollout/report", "/v1/reviews"}:
+        console_reads = {
+            "/v1/decisions",
+            "/v1/rollout/report",
+            "/v1/reviews",
+            "/v1/approvals/pending",
+        }
+        if method == "GET" and path in console_reads:
             if self.api is None:
                 self._send_json(500, {"ok": False, "error": "api not configured"})
                 return
@@ -121,9 +127,47 @@ class AetheryaHTTPRequestHandler(BaseHTTPRequestHandler):
                 status, body = self.api.decisions(query)
             elif path == "/v1/reviews":
                 status, body = self.api.reviews()
+            elif path == "/v1/approvals/pending":
+                status, body = self.api.pending_approvals()
             else:
                 status, body = self.api.rollout(query)
             self._send_json(status, body)
+            return
+
+        # Agent-facing halves of the approval flow. These sit at the same trust
+        # level as /v1/decide: parking a held action is the same act as asking
+        # for a decision about it, and the agent doing so is not the operator
+        # who answers. The request id is what authorises a poll to read back a
+        # proof, so it is 64 bits of uuid4 and must be treated as a secret by
+        # the caller holding it.
+        if path in {"/v1/approvals/request", "/v1/approvals/status"}:
+            if self.api is None:
+                self._send_json(500, {"ok": False, "error": "api not configured"})
+                return
+            if method == "GET" and path == "/v1/approvals/status":
+                status, body = self.api.approval_status(self._query())
+                self._send_json(status, body)
+                return
+            if method == "POST" and path == "/v1/approvals/request":
+                try:
+                    submit_payload = self._parse_json_body()
+                except (RequestTooLargeError, ValueError) as exc:
+                    code = 413 if isinstance(exc, RequestTooLargeError) else 400
+                    self._send_json(
+                        code, {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                    return
+                status, body = self.api.submit_approval(submit_payload)
+                self._send_json(status, body)
+                return
+            self._send_json(
+                405,
+                {
+                    "ok": False,
+                    "error_type": "MethodNotAllowed",
+                    "error": f"method not allowed for {path}",
+                },
+            )
             return
 
         # Recording a review is the console's only write, and it is what lets

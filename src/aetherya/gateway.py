@@ -405,6 +405,11 @@ def _trace(gated: list[GatedCall], phase: EnforcementPhase) -> dict[str, Any]:
             {
                 "id": c.call_id,
                 "tool": c.name,
+                # A refused call is stripped from the response, so this trace is
+                # the only remaining record of what was proposed. Without the
+                # arguments, "hard_deny" names a verdict but not the thing that
+                # earned it — which is not something an operator can act on.
+                "arguments": c.arguments,
                 "state": c.state,
                 "risk_score": c.risk_score,
                 "executed": c.execute,

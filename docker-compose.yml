@@ -75,6 +75,45 @@ services:
 
     restart: unless-stopped
 
+  # OpenAI-compatible boundary in front of a real provider. Point OpenClaw (or
+  # anything that takes a custom provider) at http://localhost:8090/v1 and every
+  # tool call the model proposes is ruled on before the agent sees it.
+  #
+  # Shares audit-data with the decision service on purpose: both write the same
+  # trail, so the console shows agent traffic alongside CLI decisions. That is
+  # only safe because the audit writer takes an exclusive lock and re-reads the
+  # chain tip under it — before that, two writers corrupted the chain in silence.
+  #
+  # Requires ANTHROPIC_API_KEY (or OPENAI_API_KEY) in .env. Without one the
+  # container starts and answers /health, and every completion returns 502.
+  gateway:
+    build: .
+    container_name: aetherya-gateway
+    ports:
+      - "8090:8090"
+    depends_on:
+      aetherya:
+        condition: service_healthy
+    environment:
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      AETHERYA_ATTESTATION_KEY: "${AETHERYA_ATTESTATION_KEY:-local-dev-attestation-key-replace-me}"
+    volumes:
+      - audit-data:/app/audit
+      - ./config:/app/config:ro
+    command:
+      - aetherya-gateway
+      - --host=0.0.0.0
+      - --port=8090
+      - --provider=${AETHERYA_GATEWAY_PROVIDER:-anthropic}
+      - --model=${AETHERYA_GATEWAY_MODEL:-claude-opus-5}
+      # `openclaw` must exist in capability_matrix.actors or phase 3 refuses
+      # every call — the gateway will not start at phase 3 without it.
+      - --actor=${AETHERYA_GATEWAY_ACTOR:-robert}
+      - --policy-path=config/policy.docker.yaml
+      - --audit-path=audit/decisions.jsonl
+    restart: unless-stopped
+
 volumes:
   redis-data:
   audit-data:
