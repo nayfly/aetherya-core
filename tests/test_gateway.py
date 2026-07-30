@@ -536,7 +536,12 @@ def test_anthropic_requests_use_adaptive_thinking_and_no_sampling_params() -> No
     """
     upstream = _FakeAnthropic(_AnthropicResponse([_Block(type="text", text="ok")]))
     _gateway(upstream, provider="anthropic").complete(
-        {"messages": [{"role": "user", "content": "hi"}], "temperature": 0.7, "top_p": 0.9}
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "claude-opus-5",
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
     )
 
     request = upstream.requests[0]
@@ -770,3 +775,64 @@ def test_the_trace_names_what_was_refused() -> None:
     gated = result["aetherya"]["gated"][0]
     assert gated["arguments"] == {"command": "rm -rf /"}
     assert gated["executed"] is False
+
+
+# ---------------------------------------------------------------------------
+# Model capability differences
+# ---------------------------------------------------------------------------
+
+
+def test_adaptive_thinking_is_omitted_on_a_model_that_rejects_it() -> None:
+    """
+    Regression, hit live: Haiku 4.5 answers `adaptive thinking is not supported
+    on this model` with a 400, so sending it unconditionally took down every
+    request rather than degrading the answer.
+    """
+    upstream = _FakeAnthropic(_AnthropicResponse([_Block(type="text", text="ok")]))
+    _gateway(upstream, provider="anthropic").complete(
+        {"messages": [{"role": "user", "content": "hi"}], "model": "claude-haiku-4-5"}
+    )
+
+    request = upstream.requests[0]
+    assert "thinking" not in request
+    assert "output_config" not in request
+
+
+def test_adaptive_thinking_is_sent_on_a_model_that_supports_it() -> None:
+    upstream = _FakeAnthropic(_AnthropicResponse([_Block(type="text", text="ok")]))
+    _gateway(upstream, provider="anthropic").complete(
+        {"messages": [{"role": "user", "content": "hi"}], "model": "claude-opus-5"}
+    )
+
+    request = upstream.requests[0]
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "high"}
+
+
+def test_an_unrecognised_model_loses_depth_rather_than_failing() -> None:
+    """
+    An allowlist, not a denylist: a model nobody has added yet should answer
+    with less depth instead of 400-ing every request.
+    """
+    upstream = _FakeAnthropic(_AnthropicResponse([_Block(type="text", text="ok")]))
+    _gateway(upstream, provider="anthropic").complete(
+        {"messages": [], "model": "claude-something-not-released-yet"}
+    )
+    assert "thinking" not in upstream.requests[0]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("claude-opus-5", True),
+        ("CLAUDE-OPUS-5", True),
+        ("  claude-sonnet-5  ", True),
+        ("claude-haiku-4-5", False),
+        ("claude-sonnet-3-7", False),
+        ("", False),
+    ],
+)
+def test_the_capability_check_is_case_and_whitespace_tolerant(model: str, expected: bool) -> None:
+    from aetherya.gateway import _supports_adaptive_thinking
+
+    assert _supports_adaptive_thinking(model) is expected

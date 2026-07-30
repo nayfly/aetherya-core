@@ -211,13 +211,20 @@ class AetheryaGateway:
                 continue
             messages.append({"role": role, "content": str(content or "")})
 
+        model = str(body.get("model") or self.settings.model)
         request: dict[str, Any] = {
-            "model": body.get("model") or self.settings.model,
+            "model": model,
             "max_tokens": int(body.get("max_tokens") or self.settings.max_tokens),
             "messages": messages,
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": self.settings.anthropic_effort},
         }
+        # Adaptive thinking and the effort control exist on the 4.6+ families
+        # and are a 400 on anything older, which takes down every request
+        # rather than degrading. Sent only where the model is known to accept
+        # them, so pointing the gateway at an older or unfamiliar model works
+        # with less depth instead of not at all.
+        if _supports_adaptive_thinking(model):
+            request["thinking"] = {"type": "adaptive"}
+            request["output_config"] = {"effort": self.settings.anthropic_effort}
         if system_parts:
             request["system"] = "\n\n".join(system_parts)
 
@@ -381,6 +388,27 @@ class AetheryaGateway:
             {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": finish or "stop"}]}
         )
         return frames
+
+
+# Families that accept `thinking: {"type": "adaptive"}` and `output_config.effort`.
+# An allowlist rather than a denylist: an unrecognised model then loses depth,
+# which is a worse answer, instead of returning 400 on every request, which is
+# no answer at all. Add a family here when it is known to support them.
+_ADAPTIVE_THINKING_FAMILIES: Final[tuple[str, ...]] = (
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
+
+
+def _supports_adaptive_thinking(model: str) -> bool:
+    name = model.strip().lower()
+    return any(name.startswith(family) for family in _ADAPTIVE_THINKING_FAMILIES)
 
 
 def _parse_arguments(raw: Any) -> dict[str, Any]:
