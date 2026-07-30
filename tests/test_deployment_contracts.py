@@ -638,3 +638,62 @@ def test_the_deployment_policy_differs_only_where_it_is_meant_to() -> None:
             signed_proof=replace(docker_evidence.signed_proof, enabled=True),
         ),
     )
+
+
+def test_the_image_installs_the_provider_sdks_the_gateway_needs() -> None:
+    """
+    Regression: the gateway runs from the same image as the decision service,
+    and that image installed only `[redis]`. With a valid API key in place every
+    completion came back 502 `anthropic is not installed` — a wiring gap that
+    reads like a network fault.
+
+    Optional extras for a library consumer; mandatory for this image, because
+    the gateway cannot reach an upstream without them.
+    """
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    install = next(
+        line for line in dockerfile.splitlines() if "pip install" in line and ".[" in line
+    )
+    for extra in ("redis", "llm", "anthropic"):
+        assert extra in install, f"{extra} missing from the image install: {install.strip()}"
+
+
+def test_the_gateway_service_gets_its_own_healthcheck() -> None:
+    """
+    The image healthcheck probes 8080 and asserts fields only the decision
+    service returns, so the gateway inherits a check it can never pass and sits
+    permanently unhealthy for a reason unrelated to its state.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    gateway_block = compose.split("  gateway:")[1]
+    assert "healthcheck:" in gateway_block
+    assert "8090/health" in gateway_block
+    assert "upstream_key_present" in gateway_block
+
+
+def test_compose_secrets_come_from_files_not_interpolation() -> None:
+    """
+    Compose gives an exported shell variable precedence over .env when the value
+    arrives as `${VAR}`, which silently defeated a key rotation three times.
+    `env_file` reads the file and ignores the shell.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "env_file:" in compose
+    for secret in (
+        "AETHERYA_CONSOLE_API_KEY",
+        "AETHERYA_APPROVALS_API_KEY",
+        "AETHERYA_CONFIRMATION_HMAC_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        assert f"{secret}: " not in compose, f"{secret} still arrives by interpolation"
+
+
+def test_the_published_ports_are_loopback_only() -> None:
+    """
+    In a container the app-level localhost check can never pass, so the port
+    publication is what actually keeps the admin routes and the upstream key
+    off the network.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:8080:8080"' in compose
+    assert '"127.0.0.1:8090:8090"' in compose
