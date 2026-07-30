@@ -593,12 +593,18 @@ def test_the_slim_policy_differs_only_in_the_semantic_layer() -> None:
     assert replace(docker.constitution_config, use_semantic=False) == slim.constitution_config
 
 
-def test_the_deployment_policy_differs_only_in_the_rate_limit_backend() -> None:
+def test_the_deployment_policy_differs_only_where_it_is_meant_to() -> None:
     """
     `config/policy.docker.yaml` exists so the container gets the distributed
-    limiter while the repo default keeps working with no infrastructure. Two
-    policy files is a drift hazard, so the difference is pinned to exactly one
-    field — anything else changing in one and not the other fails here.
+    limiter and cryptographically bound approvals, while the repo default keeps
+    working with no infrastructure at all. Two policy files is a drift hazard,
+    so the differences are pinned to exactly these two — anything else changing
+    in one and not the other fails here.
+
+    Signed proofs are on in the container because it ships the approval queue.
+    An approval that is not bound to the exact action is a token anyone can
+    type; the repo default stays off so `aetherya decide` needs no key
+    management to be useful.
     """
     from dataclasses import asdict
 
@@ -607,10 +613,28 @@ def test_the_deployment_policy_differs_only_in_the_rate_limit_backend() -> None:
 
     assert repo.rate_limit.backend == "memory"
     assert docker.rate_limit.backend == "redis"
+    assert repo.confirmation.evidence.signed_proof.enabled is False
+    assert docker.confirmation.evidence.signed_proof.enabled is True
 
-    ignored = {"policy_fingerprint", "effective_fingerprint", "rate_limit"}
+    ignored = {"policy_fingerprint", "effective_fingerprint", "rate_limit", "confirmation"}
     repo_fields = {k: v for k, v in asdict(repo).items() if k not in ignored}
     docker_fields = {k: v for k, v in asdict(docker).items() if k not in ignored}
     assert repo_fields == docker_fields
 
     assert replace(repo.rate_limit, backend="redis") == docker.rate_limit
+    # Confirmation must be identical apart from that one flag.
+    repo_evidence = repo.confirmation.evidence
+    docker_evidence = docker.confirmation.evidence
+    assert replace(
+        repo.confirmation,
+        evidence=replace(
+            repo_evidence,
+            signed_proof=replace(repo_evidence.signed_proof, enabled=True),
+        ),
+    ) == replace(
+        docker.confirmation,
+        evidence=replace(
+            docker_evidence,
+            signed_proof=replace(docker_evidence.signed_proof, enabled=True),
+        ),
+    )

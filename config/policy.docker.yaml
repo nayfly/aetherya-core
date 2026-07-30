@@ -123,7 +123,12 @@ confirmation:
     token_pattern: "^ack:[a-z0-9_-]{8,}$"
     min_context_length: 12
     signed_proof:
-      enabled: false
+      # On in the container profiles because they ship the approval queue.
+      # An approval that is not cryptographically bound to the exact action
+      # is a token anyone can type; with this on, a proof is scoped to one
+      # action, single-use, and useless anywhere else. The repo default
+      # stays off so `aetherya decide` needs no key management.
+      enabled: true
       proof_param: confirm_proof
       key_env: AETHERYA_CONFIRMATION_HMAC_KEY
       keyring_env: AETHERYA_CONFIRMATION_HMAC_KEYRING

@@ -28,7 +28,11 @@ services:
     build: .
     container_name: aetherya-decision
     ports:
-      - "8080:8080"
+      # Bound to the loopback interface on the host, not 0.0.0.0. In a container
+      # the app-level "must come from 127.0.0.1" check can never pass — every
+      # client arrives as the bridge gateway — so the port publication is what
+      # actually keeps the admin routes off the network.
+      - "127.0.0.1:8080:8080"
     depends_on:
       redis:
         condition: service_healthy
@@ -52,6 +56,13 @@ services:
       # be authenticated. Reads are gated by it too once it exists.
       AETHERYA_CONSOLE_API_KEY: "${AETHERYA_CONSOLE_API_KEY:-local-dev-console-key-replace-me}"
 
+      # Answering a held action. Both are required for the approval queue to do
+      # anything: the first authorises the operator to answer, the second signs
+      # the proof that unblocks the agent. Without them Approve fails at the
+      # click rather than at deploy time, which is the wrong moment to find out.
+      AETHERYA_APPROVALS_API_KEY: "${AETHERYA_APPROVALS_API_KEY:-}"
+      AETHERYA_CONFIRMATION_HMAC_KEY: "${AETHERYA_CONFIRMATION_HMAC_KEY:-}"
+
       # Pin the policy so a replica refuses to start under an unintended one.
       # Get the value with: aetherya policy fingerprint --json
       # Left unset locally so the stack comes up before you have run that.
@@ -72,6 +83,8 @@ services:
       - --policy-path=config/policy.docker.yaml
       - --audit-path=audit/decisions.jsonl
       - --require-semantic-ready
+      # Safe only because the port above is published on loopback.
+      - --approval-trust-network-boundary
 
     restart: unless-stopped
 
@@ -90,7 +103,9 @@ services:
     build: .
     container_name: aetherya-gateway
     ports:
-      - "8090:8090"
+      # Loopback only: this process holds your upstream API key and
+      # authenticates nobody.
+      - "127.0.0.1:8090:8090"
     depends_on:
       aetherya:
         condition: service_healthy

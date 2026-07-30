@@ -642,3 +642,56 @@ def test_a_rejection_returns_no_confirmation_parameters(
         **admin,
     )[1]
     assert "confirmation" not in body
+
+
+def test_the_localhost_check_can_be_delegated_to_the_network_boundary(
+    tmp_path: Path, policy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    In a container every client arrives as the bridge gateway, so the
+    "must come from 127.0.0.1" check can never pass and the approve button is
+    dead on arrival. Publishing the port as 127.0.0.1:PORT:PORT makes the host
+    the boundary instead; this flag says the deployment has done that.
+    """
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-key")
+    monkeypatch.setenv("AETHERYA_CONFIRMATION_HMAC_KEY", HMAC_KEY)
+    api = AetheryaAPI(
+        APISettings(
+            policy_path=policy,
+            audit_path=tmp_path / "decisions.jsonl",
+            approval_queue_path=tmp_path / "approvals.jsonl",
+            approval_sign_local_only=False,
+        )
+    )
+    request_id = _submit(api)
+
+    code, body = api.resolve_approval(
+        {"request_id": request_id, "approved": True, "decided_by": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "admin-key"},
+        client_ip="172.23.0.1",
+    )
+    assert code == 200, body
+    assert body["confirmation"]
+
+
+def test_delegating_the_boundary_does_not_drop_the_admin_key(
+    tmp_path: Path, policy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Trusting the network for locality must not also trust it for identity."""
+    monkeypatch.setenv("AETHERYA_APPROVALS_API_KEY", "admin-key")
+    api = AetheryaAPI(
+        APISettings(
+            policy_path=policy,
+            audit_path=tmp_path / "decisions.jsonl",
+            approval_queue_path=tmp_path / "approvals.jsonl",
+            approval_sign_local_only=False,
+        )
+    )
+    request_id = _submit(api)
+
+    code, _ = api.resolve_approval(
+        {"request_id": request_id, "approved": True, "decided_by": "robert"},
+        headers={"X-AETHERYA-Admin-Key": "wrong"},
+        client_ip="172.23.0.1",
+    )
+    assert code == 401
