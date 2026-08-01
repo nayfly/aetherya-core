@@ -344,6 +344,104 @@ _POWERSHELL_ELEVATED: tuple[ProceduralRule, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Exfiltration
+#
+# Everything above asks whether a command destroys something. None of it asks
+# whether a command *sends something away*, and for an agent with shell access
+# that reads untrusted web pages, that is the likelier chain: read a poisoned
+# page, propose a one-liner, ship the local secrets out. Posting a credential
+# file scored 0 alongside uploading an SSH private key.
+#
+# Scored as elevated rather than critical. Uploading a file is sometimes exactly
+# what was asked for, so this is a request for a human, not a refusal.
+#
+# What it does not cover: an agent that writes a script and runs it matches no
+# one-liner shape. The same is true of every content rule here. This raises the
+# cost of the easy path; it is not a boundary on its own. Keeping credentials
+# out of files the agent can read is worth more than any pattern below.
+# ---------------------------------------------------------------------------
+
+_REMOTE_URL = r"(?:https?://|ftp://|\b\d{1,3}(?:\.\d{1,3}){3}\b)"
+
+_EXFILTRATION_RULES: tuple[ProceduralRule, ...] = (
+    ProceduralRule(
+        tag="data_exfiltration",
+        risk_score=70,
+        confidence=0.85,
+        reason="local file uploaded to a remote destination",
+        extra_tags=("data_exposure",),
+        # curl's upload forms: `-d @file`, `--data-binary @file`, `-F x=@file`,
+        # and `-T file`. The `@` is what distinguishes reading a local file from
+        # sending a literal string.
+        pattern=re.compile(
+            rf"\bcurl\b[^|;&]{{0,200}}?"
+            # `-d @file` attaches directly; `-F field=@file` puts the name
+            # first, so the `@` is not adjacent to the flag. Both are uploads.
+            rf"(?:(?:-d|--data(?:-binary|-raw|-urlencode)?)\s*@"
+            rf"|(?:-f|--form)\s+\S*@"
+            rf"|\B-t\s+\S)"
+            rf"[^|;&]{{0,200}}?{_REMOTE_URL}"
+        ),
+    ),
+    ProceduralRule(
+        tag="data_exfiltration",
+        risk_score=70,
+        confidence=0.85,
+        reason="local file piped into a network client",
+        extra_tags=("data_exposure",),
+        # `cat secrets | curl -d @- host`, and the netcat equivalent. Anchored on
+        # a read reaching a network tool rather than on either half alone.
+        pattern=re.compile(
+            rf"\b(?:cat|type|get-content|gc)\b[^|;&]{{0,120}}\|\s*"
+            rf"(?:curl|wget|nc|ncat|netcat|iwr|irm|invoke-restmethod)\b"
+            rf"[^|;&]{{0,200}}?{_REMOTE_URL}"
+        ),
+    ),
+    ProceduralRule(
+        tag="data_exfiltration",
+        risk_score=70,
+        confidence=0.85,
+        reason="local file uploaded to a remote destination",
+        extra_tags=("data_exposure",),
+        # PowerShell. `-InFile` is an upload; `-OutFile` is a download and must
+        # not match, which is why the parameter is spelled out rather than
+        # matching any `-*file`.
+        pattern=re.compile(
+            rf"\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b"
+            rf"[^|;&]{{0,200}}?(?:-infile\b|-body\s*\(\s*(?:get-content|gc)\b)"
+            rf"|(?:-infile\b|-body\s*\(\s*(?:get-content|gc)\b)[^|;&]{{0,200}}?{_REMOTE_URL}"
+        ),
+    ),
+    ProceduralRule(
+        tag="data_exfiltration",
+        risk_score=70,
+        confidence=0.85,
+        reason="local file uploaded to a remote destination",
+        extra_tags=("data_exposure",),
+        pattern=re.compile(r"\bnew-object\s+net\.webclient\s*\)?\s*\.\s*uploadfile\b"),
+    ),
+    ProceduralRule(
+        tag="data_exfiltration",
+        risk_score=70,
+        confidence=0.85,
+        reason="local file copied to a remote host",
+        extra_tags=("data_exposure",),
+        # scp/rsync to a remote target. `user@host:path` is the shape that makes
+        # it remote; a local-to-local copy has no colon-terminated host.
+        pattern=re.compile(r"\b(?:scp|rsync)\b[^|;&]{0,160}?\s\S+@\S+:"),
+    ),
+    ProceduralRule(
+        tag="data_exfiltration",
+        risk_score=70,
+        confidence=0.85,
+        reason="local file posted by a download tool",
+        extra_tags=("data_exposure",),
+        pattern=re.compile(rf"\bwget\b[^|;&]{{0,160}}?--post-file[^|;&]{{0,160}}?{_REMOTE_URL}"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # Rule families
 #
 # Keyed by the literal that appears in `procedural_guard.critical_tags` in
@@ -425,6 +523,7 @@ _ELEVATED_FAMILIES: dict[str, tuple[ProceduralRule, ...]] = {
         ),
         *_POWERSHELL_ELEVATED,
     ),
+    "data_exfiltration": _EXFILTRATION_RULES,
 }
 
 # Regex upgrades for the default `privileged_ops` literals. Same severity and

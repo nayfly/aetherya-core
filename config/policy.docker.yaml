@@ -53,6 +53,10 @@ procedural_guard:
     - "find_delete"             # find / ... -delete
     - "recursive_force_delete"  # rm -rf on a non-root path (risk 55, not hard-deny)
     - "remote_code_execution"   # curl|wget piped into a shell (risk 70)
+    - "data_exfiltration"       # local file shipped to a remote destination:
+                                # curl -d @file, cat x | curl, iwr -InFile,
+                                # scp to a host. Escalates rather than refuses:
+                                # uploading a file is sometimes the request.
     - "powershell_destruction"  # Remove-Item -Recurse -Force C:\, Format-Volume,
                                 # diskpart clean, iwr|iex. Every rule above reads
                                 # POSIX; an agent on Windows writes none of it.

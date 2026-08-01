@@ -69,6 +69,9 @@ def test_corpus_covers_every_evasion_category() -> None:
         "powershell_case",
         "powershell_remote_exec",
         "windows_destruction",
+        # Sending data away rather than destroying it — the likelier chain for
+        # an agent that reads untrusted pages and holds a shell.
+        "exfiltration",
     }
 
 
