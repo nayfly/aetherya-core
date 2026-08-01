@@ -148,6 +148,9 @@ execution_gate:
       # write (confirmation.require_for.operations). Dropping it from here
       # silently disables confirmation for every file action.
       - operation
+      # apply_patch carries the whole patch in `input` rather than a path plus
+      # content. Observed, not guessed: it escalated on first use.
+      - input
     http: []
     memory: []
     runtime: []

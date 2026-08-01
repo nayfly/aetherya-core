@@ -1040,3 +1040,23 @@ def test_shell_and_filesystem_still_enforce_their_parameters() -> None:
         result = gate.evaluate(action)
         assert result is not None, tool
         assert "parameter_not_allowed" in result["tags"]
+
+
+def test_apply_patch_carries_its_patch_in_input() -> None:
+    """
+    Observed on first use: `apply_patch` sends the whole patch as `input`
+    rather than a path plus content, and escalated because the filesystem
+    parameter list did not know it.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+    action = ActionRequest(
+        raw_input="apply_patch",
+        intent="operate",
+        tool="apply_patch",
+        parameters={"input": "*** Begin Patch ***\n*** End Patch ***"},
+    )
+    assert gate.evaluate(action) is None
