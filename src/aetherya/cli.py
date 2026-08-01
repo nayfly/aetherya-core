@@ -32,6 +32,7 @@ from aetherya.explainability_report import main as explainability_report_main
 from aetherya.parser import parse_user_input
 from aetherya.pipeline import run_pipeline
 from aetherya.pipeline_benchmark import main as pipeline_benchmark_main
+from aetherya.policy_replay import main as policy_replay_main
 from aetherya.rollout_report import main as rollout_report_main
 from aetherya.security_baseline import main as security_baseline_main
 from aetherya.security_gate import main as security_gate_main
@@ -511,6 +512,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Emit machine-readable JSON."
     )
     policy_fingerprint_parser.set_defaults(handler=_cmd_policy_fingerprint)
+
+    _add_forward_command(
+        policy_subparsers,
+        name="replay",
+        help_text=(
+            "Evaluate a candidate policy against recorded decisions and the "
+            "adversarial corpus, and report what it changes."
+        ),
+        target_main=policy_replay_main,
+    )
 
     confirmation_parser = subparsers.add_parser("confirmation", help="Strong confirmation tooling.")
     confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command")
