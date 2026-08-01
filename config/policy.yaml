@@ -114,16 +114,22 @@ execution_gate:
   required_parameters:
     shell:
       - command
+  # The parameter allowlist catches a tool called in a shape the policy did not
+  # anticipate. That is worth enforcing where a stray parameter could carry a
+  # payload, and is only noise where it cannot.
+  #
+  # Enforced for `shell` and `filesystem`: few parameters, and an unexpected one
+  # is worth a second look.
+  #
+  # Not enforced for `http`, `memory` and `runtime` (empty list disables the
+  # check): their parameters are provider-specific metadata that no policy can
+  # enumerate — `web_search` sent `language`, `session_status` sent `sessionKey`
+  # — and none of them can carry a destructive payload. Enforcing a guessed list
+  # there escalated two ordinary calls on the first day of real traffic.
   allowed_parameters:
     shell:
       - command
       - timeout
-    http:
-      - method
-      - url
-      - body
-      - query
-      - limit
     filesystem:
       - path
       - content
@@ -134,12 +140,9 @@ execution_gate:
       # write (confirmation.require_for.operations). Dropping it from here
       # silently disables confirmation for every file action.
       - operation
-    memory:
-      - query
-      - path
-      - lines
-    runtime:
-      - operation
+    http: []
+    memory: []
+    runtime: []
 
 capability_matrix:
   enabled: true

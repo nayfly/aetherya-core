@@ -997,3 +997,46 @@ def test_an_unmapped_tool_is_still_refused(tmp_path: Path) -> None:
     )
     assert result is not None
     assert "tool_not_allowed" in result["tags"]
+
+
+def test_provider_specific_parameters_do_not_escalate_ordinary_calls() -> None:
+    """
+    Observed on the first day of real traffic: `web_search` sends `language` and
+    `session_status` sends `sessionKey`. No policy can enumerate the metadata
+    every provider attaches, and none of it can carry a destructive payload —
+    enforcing a guessed list there escalated two ordinary calls.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+
+    for tool, params in [
+        ("web_search", {"query": "verifactu", "language": "es"}),
+        ("session_status", {"sessionKey": "current"}),
+        ("memory_get", {"path": "MEMORY.md", "lines": 30}),
+    ]:
+        action = ActionRequest(raw_input=tool, intent="operate", tool=tool, parameters=params)
+        assert gate.evaluate(action) is None, (tool, params)
+
+
+def test_shell_and_filesystem_still_enforce_their_parameters() -> None:
+    """
+    Relaxing the metadata groups must not relax the two where a stray parameter
+    is worth a second look.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+
+    for tool, params in [
+        ("exec", {"command": "ls", "surprise": "x"}),
+        ("write", {"path": "a.txt", "content": "x", "surprise": "x"}),
+    ]:
+        action = ActionRequest(raw_input=tool, intent="operate", tool=tool, parameters=params)
+        result = gate.evaluate(action)
+        assert result is not None, tool
+        assert "parameter_not_allowed" in result["tags"]
