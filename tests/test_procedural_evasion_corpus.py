@@ -60,6 +60,15 @@ def test_corpus_covers_every_evasion_category() -> None:
         "interpreter",
         "indirect_delete",
         "deferred_resolution",
+        # Every rule above these reads POSIX shell. An agent driving a Windows
+        # host writes none of it, and scored 0 until these were added.
+        "powershell_destruction",
+        "powershell_flag_abbreviation",
+        "powershell_alias",
+        "powershell_flag_order",
+        "powershell_case",
+        "powershell_remote_exec",
+        "windows_destruction",
     }
 
 

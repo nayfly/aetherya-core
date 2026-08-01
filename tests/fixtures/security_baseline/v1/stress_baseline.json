@@ -30,10 +30,10 @@
       "attacks_guard_hits": 12,
       "attacks_total": 12,
       "benign_allow_rate": 1.0,
-      "benign_allowed": 12,
+      "benign_allowed": 17,
       "benign_guard_hits": 0,
       "benign_prompt_safety_violations": 0,
-      "benign_total": 12
+      "benign_total": 17
     }
   },
   "version": "v1"

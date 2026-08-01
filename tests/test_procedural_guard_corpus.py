@@ -261,3 +261,70 @@ def test_strip_target_normalizes_punctuation_and_trailing_slash() -> None:
     assert _strip_target("/var/") == "/var"
     assert _strip_target("/") == "/"
     assert _strip_target("...") == "/"
+
+
+# ---------------------------------------------------------------------------
+# PowerShell
+#
+# Every rule predating these reads POSIX shell. An agent driving a Windows host
+# writes `Remove-Item -Recurse -Force C:\` for what `rm -rf /` means, and that
+# scored 0 — no destructive PowerShell form was recognised at all.
+# ---------------------------------------------------------------------------
+
+
+def test_powershell_recurse_without_force_is_not_root_destruction() -> None:
+    """
+    Both flags are required, as in the POSIX rule. `-Recurse` alone still
+    prompts per item, so it is not the unattended wipe this tag is reserved for.
+    """
+    from aetherya.procedural_guard import _detect_powershell_root_delete
+    from aetherya.text_normalize import normalize_security_text
+
+    assert not _detect_powershell_root_delete(normalize_security_text("Remove-Item -Recurse C:\\"))
+    assert not _detect_powershell_root_delete(normalize_security_text("Remove-Item -Force C:\\"))
+    assert _detect_powershell_root_delete(
+        normalize_security_text("Remove-Item -Recurse -Force C:\\")
+    )
+
+
+def test_powershell_flags_from_a_later_pipeline_stage_do_not_count() -> None:
+    """
+    A flag belonging to a different command must not complete an earlier
+    invocation, or two harmless commands compose into a false hard-deny.
+    """
+    from aetherya.procedural_guard import _detect_powershell_root_delete
+    from aetherya.text_normalize import normalize_security_text
+
+    assert not _detect_powershell_root_delete(
+        normalize_security_text("Remove-Item temp.txt; Get-ChildItem -Recurse -Force C:\\")
+    )
+
+
+def test_powershell_recursive_force_on_a_project_path_is_ordinary_work() -> None:
+    """
+    The most common thing an agent does. A rule that fires here makes the guard
+    unusable on Windows, which is worse than not having it.
+    """
+    guard = _guard()
+    for command in (
+        "Remove-Item -Recurse -Force .\\build",
+        "Remove-Item -Recurse -Force node_modules",
+        "Remove-Item -Path temp.txt",
+    ):
+        # `None` means no rule matched at all, which is the intended outcome.
+        assert guard.evaluate(command) is None, command
+
+
+def test_powershell_destruction_is_detected_across_alias_and_abbreviation() -> None:
+    guard = _guard()
+    for command in (
+        "Remove-Item -Path C:\\ -Recurse -Force",
+        "ri -rec -for C:\\",
+        "rd -recurse -force $env:windir",
+        "REMOVE-ITEM -RECURSE -FORCE C:\\",
+        "Remove-Item -Force -Path C:\\ -Recurse",
+        "Format-Volume -DriveLetter D",
+        "diskpart /s clean",
+    ):
+        result = guard.evaluate(command)
+        assert "critical_tag_detected" in result["tags"], command

@@ -52,6 +52,9 @@ procedural_guard:
     - "find_delete"             # find / ... -delete
     - "recursive_force_delete"  # rm -rf on a non-root path (risk 55, not hard-deny)
     - "remote_code_execution"   # curl|wget piped into a shell (risk 70)
+    - "powershell_destruction"  # Remove-Item -Recurse -Force C:\, Format-Volume,
+                                # diskpart clean, iwr|iex. Every rule above reads
+                                # POSIX; an agent on Windows writes none of it.
   privileged_ops:
     - "apt remove"
     - "apt purge"
