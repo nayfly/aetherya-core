@@ -157,12 +157,45 @@ relying on the generic mapping.
 
 ---
 
+## Tool results
+
+Gating a tool call asks whether an action is safe to take. It says nothing about
+what comes back — and on the deployment this was built for, `memory_get`
+returned live credentials from a memory file, which then went to the model and
+to the provider unexamined.
+
+Every `role: tool` message in a request is checked for API keys, tokens, private
+keys and the other patterns in `output_gate.py`. The finding records the *kind*
+(`api_key`, `private_key`) and never the match: writing it down would put the
+credential in the audit trail, which is the outcome this exists to prevent.
+
+It follows the phase, like everything else. Phase 1 records and forwards
+unchanged — redacting there would alter agent behaviour, the one thing shadow
+mode promises not to do. From phase 2 the content is replaced:
+
+```
+[REDACTED by ÆTHERYA: sensitive data detected: api_key.
+ The tool output contained sensitive data and was withheld.]
+```
+
+Redaction rather than refusal, for the same reason a refused tool call is
+explained rather than dropped: an agent that gets an error loses its trajectory,
+while one that gets this can carry on and say why it could not finish.
+
+**Two honest limits.** By the time this runs the file has already been read from
+disk — what it prevents is the secret reaching the model and the provider, not
+the read. And it only knows the credential formats it has patterns for: a
+license key or an internal identifier with no recognisable shape passes, and any
+pattern loose enough to catch those would flag ordinary text. Keeping secrets
+out of files the agent can read is worth more than the detector.
+
 ## What it does not do
 
 - **It does not sandbox.** ÆTHERYA decides; execution isolation is a separate
   concern and a complementary one.
-- **It does not gate model output text**, only proposed tool calls. Use
-  `output_gate` for response content.
+- **It does not gate the model's own prose**, only proposed tool calls and what
+  the agent's tools hand back. A model that simply says something unwise is not
+  covered.
 - **It does not handle phase-3 confirmations.** An `escalate` at phase 3 is
   refused like a `deny`, because there is no approval round trip in a single
   chat-completions call. Agents that need held-for-approval semantics want the
