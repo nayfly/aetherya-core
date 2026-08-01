@@ -204,3 +204,81 @@ def test_pipeline_policy_fingerprint_setter_failure_is_swallowed(
     )
     assert d.allowed is True
     assert len(audit.events) == 1
+
+
+# ---------------------------------------------------------------------------
+# What the trail has to carry for phase-1 vocabulary analysis
+# ---------------------------------------------------------------------------
+
+
+def test_the_audit_records_the_structured_action(tmp_path) -> None:  # noqa: ANN001
+    """
+    Regression: `context.action` was never written, so every real decision had
+    `tool: null` and recovering an agent's vocabulary meant regexing prose.
+    Phase 1 exists to tell you what your agent actually calls, and that needs
+    structure. The console test passed only because it seeded the field by hand.
+    """
+    import json
+    from pathlib import Path
+
+    from aetherya.actions import ActionRequest
+    from aetherya.audit import AuditLogger
+    from aetherya.config import load_policy_config
+    from aetherya.constitution import Constitution
+    from aetherya.pipeline import run_pipeline_structured
+
+    path = tmp_path / "decisions.jsonl"
+    run_pipeline_structured(
+        ActionRequest(
+            raw_input="exec ls -la",
+            intent="operate",
+            tool="shell",
+            target="/srv/app",
+            parameters={"command": "ls -la", "operation": "read"},
+        ),
+        constitution=Constitution([], use_semantic=False),
+        actor="robert",
+        cfg=load_policy_config(Path("config/policy.yaml")),
+        audit=AuditLogger(str(path)),
+    )
+
+    recorded = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["context"]["action"]
+    assert recorded["tool"] == "shell"
+    assert recorded["intent"] == "operate"
+    assert recorded["target"] == "/srv/app"
+    assert recorded["operation"] == "read"
+    assert recorded["parameter_names"] == ["command", "operation"]
+
+
+def test_the_audit_records_parameter_names_but_never_their_values(tmp_path) -> None:  # noqa: ANN001
+    """
+    A confirmed action carries `confirm_proof`, a single-use credential. The
+    trail is exported, mirrored and archived — anything written there cannot be
+    taken back out.
+    """
+    import json
+    from pathlib import Path
+
+    from aetherya.actions import ActionRequest
+    from aetherya.audit import AuditLogger
+    from aetherya.config import load_policy_config
+    from aetherya.constitution import Constitution
+    from aetherya.pipeline import run_pipeline_structured
+
+    path = tmp_path / "decisions.jsonl"
+    run_pipeline_structured(
+        ActionRequest(
+            raw_input="write config",
+            intent="operate",
+            tool="filesystem",
+            parameters={"operation": "write", "confirm_proof": "ap1.k1.SECRET-PROOF-VALUE"},
+        ),
+        constitution=Constitution([], use_semantic=False),
+        actor="robert",
+        cfg=load_policy_config(Path("config/policy.yaml")),
+        audit=AuditLogger(str(path)),
+    )
+
+    line = path.read_text(encoding="utf-8").splitlines()[-1]
+    assert "SECRET-PROOF-VALUE" not in line
+    assert "confirm_proof" in json.loads(line)["context"]["action"]["parameter_names"]

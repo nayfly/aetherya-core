@@ -237,6 +237,30 @@ def _mode_thresholds(cfg: PolicyConfig | Any, mode: str) -> dict[str, int]:
     }
 
 
+def _audit_action(action: ActionRequest) -> dict[str, Any]:
+    """
+    The structured shape of what was requested, for the audit trail.
+
+    `raw_input` is already recorded, but as prose: recovering which tool an
+    agent used means regexing a string, and the console's tool column read as
+    empty for every real decision because nothing ever wrote this. Phase 1 is
+    supposed to tell you what vocabulary your agent actually speaks, and that
+    needs structure rather than a rendering.
+
+    Parameter *names* only. Values carry commands, file contents and — for a
+    confirmed action — `confirm_proof`, which is a single-use credential. The
+    audit trail is exported, mirrored and archived; a credential written there
+    cannot be taken back out.
+    """
+    return {
+        "intent": action.intent,
+        "tool": action.tool,
+        "target": action.target,
+        "operation": action.parameters.get("operation"),
+        "parameter_names": sorted(str(name) for name in action.parameters),
+    }
+
+
 def _fail_closed(
     *,
     raw_input: str,
@@ -923,6 +947,7 @@ def run_pipeline(
             context: dict[str, Any] = {
                 "mode": mode.value,
                 "signals": [s.__dict__ for s in agg.breakdown],
+                "action": _audit_action(action),
             }
             if explainability:
                 context["explainability"] = explainability
