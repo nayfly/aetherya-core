@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -935,3 +937,63 @@ def test_constitution_config_gray_zone_exceeds_violation(tmp_path):
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError, match="semantic_gray_zone_threshold"):
         load_policy_config(path)
+
+
+# ---------------------------------------------------------------------------
+# Tool vocabulary translation
+# ---------------------------------------------------------------------------
+
+
+def test_an_alias_to_an_unlisted_tool_is_refused(tmp_path: Path) -> None:
+    """
+    An alias pointing at a capability the allowlist does not contain denies
+    everything mapped to it, and reads as the runtime being rejected rather
+    than the policy being wrong. Fail at load, where it is one line to fix.
+    """
+    data = yaml.safe_load(Path("config/policy.yaml").read_text(encoding="utf-8"))
+    data["tool_aliases"]["exec"] = "sandbox"  # never in allowed_tools
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="absent from execution_gate.allowed_tools"):
+        load_policy_config(path)
+
+
+def test_both_gates_resolve_the_same_alias(tmp_path: Path) -> None:
+    """
+    The execution gate and the capability matrix must agree on what a tool is.
+    When only one resolved aliases, `exec` passed the allowlist and was then
+    refused by the matrix — ordinary work denied for a reason nobody can find.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.capability_gate import CapabilityGate
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    action = ActionRequest(
+        raw_input="exec ls",
+        intent="operate",
+        tool="exec",
+        parameters={"command": "ls"},
+    )
+
+    assert ExecutionGate(cfg.execution_gate, cfg.tool_aliases).evaluate(action) is None
+    assert (
+        CapabilityGate(cfg.capability_matrix, cfg.tool_aliases).evaluate(
+            actor="robert", action=action
+        )
+        is None
+    )
+
+
+def test_an_unmapped_tool_is_still_refused(tmp_path: Path) -> None:
+    """The allowlist still means something: aliases widen vocabulary, not scope."""
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    result = ExecutionGate(cfg.execution_gate, cfg.tool_aliases).evaluate(
+        ActionRequest(raw_input="x", intent="operate", tool="browser", parameters={})
+    )
+    assert result is not None
+    assert "tool_not_allowed" in result["tags"]

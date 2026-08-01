@@ -53,12 +53,63 @@ procedural_guard:
     - "userdel"
     - "chmod -R 777 /"
 
+# External runtime vocabulary -> canonical capability.
+#
+# Taken from OpenClaw's own tool-group definitions (docs/gateway/config-tools),
+# not guessed from observation: the `coding` profile exposes 25 tools and only
+# 7 had appeared in three days of real use. Waiting to see the rest would have
+# measured nothing while the gate refused every call by name.
+#
+# The audit trail keeps the name the agent actually used, so the vocabulary
+# report still shows `exec` and `read` rather than the canonical form.
+tool_aliases:
+  # group:runtime - arbitrary command execution. Content matters here, and
+  # this is where the POSIX and PowerShell rules do their work.
+  exec: shell
+  bash: shell
+  process: shell
+  code_execution: shell
+
+  # group:fs - reads and writes to workspace files. The path matters.
+  read: filesystem
+  write: filesystem
+  edit: filesystem
+  apply_patch: filesystem
+
+  # group:web - leaves the machine. Exfiltration surface.
+  web_search: http
+  web_fetch: http
+  x_search: http
+
+  # group:memory - reads the agent's own state. Looks harmless, and
+  # memory_get returned live credentials from MEMORY.md on 2026-08-01.
+  memory_search: memory
+  memory_get: memory
+
+  # group:sessions - inspects and steers runs. Touches no host resource.
+  session_status: runtime
+  sessions_list: runtime
+  sessions_history: runtime
+  sessions_send: runtime
+  sessions_spawn: runtime
+  sessions_yield: runtime
+  subagents: runtime
+  update_plan: runtime
+  agents_list: runtime
+
 execution_gate:
   enabled: true
+  # Canonical capabilities this policy is written against. Runtimes name them
+  # differently; `tool_aliases` below translates. Keeping this list short is the
+  # point: it is a set of capabilities, not an accumulation of every
+  # ecosystem's tool names.
   allowed_tools:
     - shell
     - http
     - filesystem
+    - memory
+    - runtime
+
   require_target_for_operate: false
   required_parameters:
     shell:
@@ -71,11 +122,24 @@ execution_gate:
       - method
       - url
       - body
+      - query
+      - limit
     filesystem:
       - path
+      - content
+      - edits
+      - limit
+      - offset
+      # `operation` is what the confirmation gate reads to know a write is a
+      # write (confirmation.require_for.operations). Dropping it from here
+      # silently disables confirmation for every file action.
       - operation
-      - confirm_token
-      - confirm_context
+    memory:
+      - query
+      - path
+      - lines
+    runtime:
+      - operation
 
 capability_matrix:
   enabled: true
@@ -86,6 +150,8 @@ capability_matrix:
         - shell
         - http
         - filesystem
+        - memory
+        - runtime
       operations:
         - read
         - write

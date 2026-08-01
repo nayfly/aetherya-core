@@ -371,6 +371,15 @@
         "blocked": true,
         "hard_deny": false
       }
+    },
+    {
+      "id": "ps_forward_slash_root_042",
+      "category": "powershell_destruction",
+      "text": "Remove-Item -Path C:/ -Recurse -Force",
+      "expected": {
+        "blocked": true,
+        "hard_deny": true
+      }
     }
   ]
 }

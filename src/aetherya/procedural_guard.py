@@ -268,7 +268,9 @@ _PS_FORCE = r"-f(?:o(?:r(?:c(?:e)?)?)?)?\b"
 # the environment variables are matched by name because their expansion is not
 # visible here.
 _PS_ROOT_TARGET = (
-    r"(?:[a-z]:\\?(?=\s|$)"
+    # Windows accepts both separators, and the normalizer only preserves a
+    # backslash when a space follows it, so all three spellings reach here.
+    r"(?:[a-z]:[\\/]?(?=\s|$)"
     r"|\$env:(?:userprofile|systemroot|systemdrive|windir|programfiles|appdata|homepath)"
     r"|%(?:userprofile|systemroot|systemdrive|windir|appdata)%"
     r"|\$home\b)"

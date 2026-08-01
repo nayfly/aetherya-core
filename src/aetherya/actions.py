@@ -112,3 +112,20 @@ def validate_action_request(action: Any) -> ActionRequest:
 
     action.validate()
     return action
+
+
+def canonical_tool(action: ActionRequest, aliases: dict[str, str] | None = None) -> str:
+    """
+    The capability a tool call maps to, after runtime vocabulary translation.
+
+    Runtimes name the same capability differently: OpenClaw's `exec` is what
+    this policy calls `shell`, and its `read`, `write` and `edit` are all
+    `filesystem`. Every gate resolves through here so they cannot disagree —
+    one accepting `exec` while another refuses it is a policy that denies
+    ordinary work for a reason nobody can find.
+
+    The action itself is left alone. The audit trail records the name the agent
+    actually used, which is what the vocabulary report reads.
+    """
+    tool = (action.tool or "").strip()
+    return (aliases or {}).get(tool, tool)
