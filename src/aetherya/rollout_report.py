@@ -58,6 +58,11 @@ class RolloutReport:
     chain_errors: int = 0
     chain_error_detail: str | None = None
     hard_deny_events: list[dict[str, Any]] = field(default_factory=list)
+    # What vocabulary the agent actually speaks: tool -> count, and the
+    # operations and parameter names seen with it. This is the phase-1
+    # deliverable that no synthetic corpus can produce — you cannot know which
+    # tools your runtime calls until you watch it work.
+    vocabulary: dict[str, dict[str, Any]] = field(default_factory=dict)
     criteria: list[Criterion] = field(default_factory=list)
 
     @property
@@ -89,6 +94,7 @@ class RolloutReport:
                 "detail": self.chain_error_detail,
             },
             "hard_deny_events": self.hard_deny_events,
+            "vocabulary": self.vocabulary,
             "criteria": [c.to_dict() for c in self.criteria],
         }
 
@@ -147,6 +153,7 @@ def build_report(
     tools: dict[str, set[str]] = {}
     fingerprints: set[str] = set()
     timestamps: list[datetime] = []
+    vocabulary: dict[str, dict[str, Any]] = {}
 
     for event in events:
         decision = event.get("decision") or {}
@@ -155,9 +162,21 @@ def build_report(
         states[state] += 1
 
         actors.setdefault(state, set()).add(str(event.get("actor", "unknown")))
-        action_ctx = context.get("action") if isinstance(context.get("action"), dict) else {}
-        tool = action_ctx.get("tool") if isinstance(action_ctx, dict) else None
+        raw_action = context.get("action")
+        action_ctx: dict[str, Any] = raw_action if isinstance(raw_action, dict) else {}
+        tool = action_ctx.get("tool")
         tools.setdefault(state, set()).add(str(tool) if tool else "-")
+
+        if tool:
+            entry = vocabulary.setdefault(
+                str(tool), {"count": 0, "states": {}, "operations": set(), "parameters": set()}
+            )
+            entry["count"] += 1
+            entry["states"][state] = entry["states"].get(state, 0) + 1
+            if action_ctx.get("operation"):
+                entry["operations"].add(str(action_ctx["operation"]))
+            for name in action_ctx.get("parameter_names") or []:
+                entry["parameters"].add(str(name))
 
         if context.get("intent_escalation"):
             report.intent_escalations += 1
@@ -195,6 +214,16 @@ def build_report(
     report.actors_by_state = {k: sorted(v) for k, v in sorted(actors.items())}
     report.tools_by_state = {k: sorted(v) for k, v in sorted(tools.items())}
     report.policy_fingerprints = sorted(fingerprints)
+    report.vocabulary = {
+        tool: {
+            "count": entry["count"],
+            "states": dict(sorted(entry["states"].items())),
+            "operations": sorted(entry["operations"]),
+            "parameters": sorted(entry["parameters"]),
+        }
+        # Most frequent first: that is the order to map them in.
+        for tool, entry in sorted(vocabulary.items(), key=lambda kv: -kv[1]["count"])
+    }
     report.would_block_next_phase = sum(
         states[s] for s in (next_phase.blocks | next_phase.confirms) if s in states
     )
@@ -347,6 +376,17 @@ def _print_text(report: RolloutReport) -> None:
     print(f"  semantic skipped     {report.semantic_skipped}")
     print(f"  policy fingerprints  {len(report.policy_fingerprints)}")
     print(f"  audit chain          {'intact' if report.chain_valid else 'INVALID'}")
+
+    if report.vocabulary:
+        # The phase-1 deliverable. Stop when this stops growing: a thousand
+        # varied decisions map a runtime better than ten thousand repeats of
+        # the same call.
+        print("\n  vocabulary observed")
+        for tool, entry in report.vocabulary.items():
+            states = " ".join(f"{s}:{n}" for s, n in entry["states"].items())
+            print(f"    {tool:<18} {entry['count']:>4}  {states}")
+            if entry["parameters"]:
+                print(f"    {'':<18}       params: {', '.join(entry['parameters'][:8])}")
 
     if report.hard_deny_events:
         print(f"\n  hard_deny events to review ({len(report.hard_deny_events)} shown)")

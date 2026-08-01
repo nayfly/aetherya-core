@@ -385,3 +385,121 @@ def test_text_output_without_timestamps_omits_the_range(
     out = capsys.readouterr().out
     assert "window" in out
     assert "  ->  " not in out
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary: the phase-1 deliverable
+# ---------------------------------------------------------------------------
+
+
+def test_the_report_maps_the_vocabulary_the_agent_actually_speaks(tmp_path: Path) -> None:
+    """
+    You cannot know which tools your runtime calls until you watch it work, and
+    the policy allowlist is written against that vocabulary. This is what tells
+    an operator when the sample is complete enough to map.
+    """
+    from aetherya.audit import AuditLogger
+
+    path = tmp_path / "decisions.jsonl"
+    logger = AuditLogger(str(path))
+    for tool, operation, params, state in [
+        ("exec", None, ["command", "timeout"], "hard_deny"),
+        ("exec", None, ["command"], "hard_deny"),
+        ("write", "write", ["content", "path"], "hard_deny"),
+        ("shell", "read", ["command"], "allow"),
+    ]:
+        logger.log(
+            actor="robert",
+            action=f"{tool} something",
+            decision={"allowed": False, "risk_score": 0, "reason": "x", "state": state},
+            context={
+                "action": {
+                    "tool": tool,
+                    "operation": operation,
+                    "parameter_names": params,
+                }
+            },
+        )
+
+    vocabulary = build_report(path, min_decisions=1, min_days=0.0).vocabulary
+
+    # Most frequent first: that is the order to map them in.
+    assert list(vocabulary) == ["exec", "write", "shell"]
+    assert vocabulary["exec"]["count"] == 2
+    assert vocabulary["exec"]["states"] == {"hard_deny": 2}
+    assert vocabulary["exec"]["parameters"] == ["command", "timeout"]
+    assert vocabulary["write"]["operations"] == ["write"]
+
+
+def test_events_without_a_structured_action_are_left_out(tmp_path: Path) -> None:
+    """
+    Decisions recorded before the trail carried structure have no tool to
+    report. Counting them as a nameless entry would misrepresent the sample.
+    """
+    from aetherya.audit import AuditLogger
+
+    path = tmp_path / "decisions.jsonl"
+    AuditLogger(str(path)).log(
+        actor="robert",
+        action="legacy event",
+        decision={"allowed": True, "risk_score": 0, "reason": "ok", "state": "allow"},
+        context={},
+    )
+    assert build_report(path, min_decisions=1, min_days=0.0).vocabulary == {}
+
+
+def test_the_vocabulary_reaches_the_console(tmp_path: Path) -> None:
+    from aetherya.api import AetheryaAPI, APISettings
+    from aetherya.audit import AuditLogger
+
+    path = tmp_path / "decisions.jsonl"
+    AuditLogger(str(path)).log(
+        actor="robert",
+        action="exec ls",
+        decision={"allowed": False, "risk_score": 180, "reason": "x", "state": "hard_deny"},
+        context={"action": {"tool": "exec", "parameter_names": ["command"]}},
+    )
+
+    api = AetheryaAPI(APISettings(audit_path=path, review_path=tmp_path / "r.jsonl"))
+    assert api.rollout()[1]["report"]["vocabulary"]["exec"]["count"] == 1
+
+
+def test_a_tool_with_no_parameters_prints_without_a_params_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`session_status` takes none; the report must not print an empty list."""
+    from aetherya.audit import AuditLogger
+    from aetherya.rollout_report import _print_text
+
+    path = tmp_path / "decisions.jsonl"
+    AuditLogger(str(path)).log(
+        actor="robert",
+        action="session_status current",
+        decision={"allowed": False, "risk_score": 180, "reason": "x", "state": "hard_deny"},
+        context={"action": {"tool": "session_status", "parameter_names": []}},
+    )
+
+    _print_text(build_report(path, min_decisions=1, min_days=0.0))
+    out = capsys.readouterr().out
+    assert "session_status" in out
+    assert "params:" not in out
+
+
+def test_a_tool_with_parameters_lists_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The parameter names are what the execution gate is configured against."""
+    from aetherya.audit import AuditLogger
+    from aetherya.rollout_report import _print_text
+
+    path = tmp_path / "decisions.jsonl"
+    AuditLogger(str(path)).log(
+        actor="robert",
+        action="exec ls",
+        decision={"allowed": False, "risk_score": 180, "reason": "x", "state": "hard_deny"},
+        context={"action": {"tool": "exec", "parameter_names": ["command", "timeout"]}},
+    )
+
+    _print_text(build_report(path, min_decisions=1, min_days=0.0))
+    out = capsys.readouterr().out
+    assert "params: command, timeout" in out
