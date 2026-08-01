@@ -13,6 +13,7 @@ from aetherya.audit import AuditLogger
 from aetherya.config import PolicyConfig
 from aetherya.constitution import Constitution
 from aetherya.enforcement import EnforcementPhase, apply_enforcement, resolve_phase
+from aetherya.output_gate import OutputGate
 from aetherya.pipeline import run_pipeline_structured
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,7 @@ class AetheryaGateway:
         self.cfg = cfg
         self.audit = audit
         self.phase: EnforcementPhase = resolve_phase(settings.phase)
+        self._output_gate = OutputGate()
         self._upstream = upstream
 
     # -- upstream -------------------------------------------------------------
@@ -287,14 +289,70 @@ class AetheryaGateway:
             )
         return gated
 
+    def scan_tool_results(self, body: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Check what the agent's tools handed back, and redact it when the phase says so.
+
+        Gating tool calls asks whether an action is safe to take. It says nothing
+        about what comes back, and that is a real gap: `memory_get` returned live
+        credentials from a memory file on this deployment, and they went to the
+        model and to the provider unexamined.
+
+        Redaction rather than refusal, for the same reason a refused tool call is
+        explained rather than dropped — an agent that gets an error loses its
+        trajectory, while one that gets `[REDACTED: …]` can carry on and say why
+        it could not finish.
+
+        Honest about the limit: by the time this runs, the file has already been
+        read from disk. What it prevents is the secret reaching the model and the
+        provider, not the read.
+        """
+        findings: list[dict[str, Any]] = []
+        # Phase 1 observes. Redacting there would change agent behaviour, which
+        # is the one thing shadow mode promises not to do.
+        redact = "hard_deny" in self.phase.blocks
+
+        for raw in body.get("messages") or []:
+            message = raw if isinstance(raw, dict) else {}
+            if message.get("role") != "tool":
+                continue
+            content = message.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            verdict = self._output_gate.evaluate(content)
+            if verdict is None:
+                continue
+
+            # The label, never the match. Recording what was found here would
+            # put the credential in the audit trail — the exact outcome this is
+            # meant to prevent.
+            findings.append(
+                {
+                    "tool_call_id": str(message.get("tool_call_id", "")),
+                    "finding": verdict.matched_terms[0] if verdict.matched_terms else "unknown",
+                    "reason": verdict.reason,
+                    "redacted": redact,
+                }
+            )
+            if redact:
+                message["content"] = (
+                    f"[REDACTED by ÆTHERYA: {verdict.reason}. "
+                    "The tool output contained sensitive data and was withheld.]"
+                )
+        return findings
+
     def complete(self, body: dict[str, Any]) -> dict[str, Any]:
         """Handle one /v1/chat/completions request."""
         payload = _as_dict(body)
+        # Before the upstream call: redaction has to happen while there is still
+        # something to redact.
+        result_findings = self.scan_tool_results(payload)
         completion = self._upstream_completion(payload)
 
         choices = completion.get("choices") or []
         if not choices or not isinstance(choices[0], dict):
-            return completion
+            return _with_findings(completion, self.phase, result_findings)
 
         # Held by reference on purpose: refusals are applied by editing the
         # response the agent receives, so a copy here would silently discard
@@ -302,16 +360,18 @@ class AetheryaGateway:
         choice = choices[0]
         message = choice.get("message")
         if not isinstance(message, dict):
-            return completion
+            return _with_findings(completion, self.phase, result_findings)
         calls = list(message.get("tool_calls") or [])
         if not calls:
-            return completion
+            # A turn with no tool call can still have carried a leaking result
+            # in its request; the trace has to survive the early return.
+            return _with_findings(completion, self.phase, result_findings)
 
         gated = self.gate_tool_calls(calls)
         refused = [c for c in gated if not c.execute]
 
         if not refused:
-            completion["aetherya"] = _trace(gated, self.phase)
+            completion["aetherya"] = _trace(gated, self.phase, result_findings)
             return completion
 
         # Refused calls are removed and explained in the assistant's text. The
@@ -327,7 +387,7 @@ class AetheryaGateway:
             message.pop("tool_calls", None)
             choice["finish_reason"] = "stop"
 
-        completion["aetherya"] = _trace(gated, self.phase)
+        completion["aetherya"] = _trace(gated, self.phase, result_findings)
         return completion
 
     def stream(self, body: dict[str, Any]) -> list[dict[str, Any]]:
@@ -425,7 +485,11 @@ def _parse_arguments(raw: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"_value": parsed}
 
 
-def _trace(gated: list[GatedCall], phase: EnforcementPhase) -> dict[str, Any]:
+def _trace(
+    gated: list[GatedCall],
+    phase: EnforcementPhase,
+    result_findings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "phase": phase.number,
         "phase_name": phase.name,
@@ -448,7 +512,24 @@ def _trace(gated: list[GatedCall], phase: EnforcementPhase) -> dict[str, Any]:
         ],
         "refused": sum(1 for c in gated if not c.execute),
         "shadow_gap": sum(1 for c in gated if c.shadow_gap),
+        "tool_result_findings": list(result_findings or []),
     }
+
+
+def _with_findings(
+    completion: dict[str, Any],
+    phase: EnforcementPhase,
+    result_findings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Attach a trace for a turn that produced no tool call but leaked anyway.
+
+    Same shape as the full trace, so a client reads one format regardless of
+    which path produced it.
+    """
+    if result_findings:
+        completion["aetherya"] = _trace([], phase, result_findings)
+    return completion
 
 
 def _anthropic_to_chat_completion(response: Any, model: str) -> dict[str, Any]:

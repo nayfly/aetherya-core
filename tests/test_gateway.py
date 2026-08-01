@@ -836,3 +836,134 @@ def test_the_capability_check_is_case_and_whitespace_tolerant(model: str, expect
     from aetherya.gateway import _supports_adaptive_thinking
 
     assert _supports_adaptive_thinking(model) is expected
+
+
+# ---------------------------------------------------------------------------
+# Tool results
+#
+# Gating a tool call asks whether an action is safe to take. It says nothing
+# about what comes back — and `memory_get` returned live credentials from a
+# memory file on the deployment this was built for, which then went to the model
+# and the provider unexamined.
+# ---------------------------------------------------------------------------
+
+_LEAKING_RESULT = (
+    "Here are the keys you asked for:\n"
+    "ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+)
+
+
+def _with_tool_result(content: str) -> dict[str, Any]:
+    return {
+        "messages": [
+            {"role": "user", "content": "show me the keys"},
+            {"role": "tool", "tool_call_id": "c1", "content": content},
+        ]
+    }
+
+
+def test_a_leaking_tool_result_is_reported_in_shadow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Phase 1 observes. Redacting there would change agent behaviour, which is the
+    one thing shadow mode promises not to do.
+    """
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    body = _with_tool_result(_LEAKING_RESULT)
+    result = _gateway(upstream, phase=1).complete(body)
+
+    findings = result["aetherya"]["tool_result_findings"]
+    assert findings[0]["finding"] == "api_key"
+    assert findings[0]["redacted"] is False
+    # Unchanged on the way upstream.
+    assert "sk-ant-api03" in upstream.requests[0]["messages"][-1]["content"]
+
+
+def test_a_leaking_tool_result_is_redacted_once_the_phase_enforces() -> None:
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    body = _with_tool_result(_LEAKING_RESULT)
+    result = _gateway(upstream, phase=2).complete(body)
+
+    findings = result["aetherya"]["tool_result_findings"]
+    assert findings[0]["redacted"] is True
+    forwarded = upstream.requests[0]["messages"][-1]["content"]
+    assert "sk-ant-api03" not in forwarded
+    assert "REDACTED by ÆTHERYA" in forwarded
+
+
+def test_the_finding_names_the_kind_and_never_the_secret() -> None:
+    """
+    Recording the match would put the credential in the audit trail — the exact
+    outcome this exists to prevent.
+    """
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    result = _gateway(upstream, phase=2).complete(_with_tool_result(_LEAKING_RESULT))
+
+    serialised = json.dumps(result["aetherya"])
+    assert "api_key" in serialised
+    assert "sk-ant-api03" not in serialised
+
+
+def test_an_ordinary_tool_result_produces_no_finding() -> None:
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    body = _with_tool_result("total 24\ndrwxr-xr-x  build\n-rw-r--r--  README.md")
+    result = _gateway(upstream, phase=2).complete(body)
+
+    assert result.get("aetherya", {}).get("tool_result_findings", []) == []
+    assert "README.md" in upstream.requests[0]["messages"][-1]["content"]
+
+
+def test_a_finding_survives_a_turn_with_no_tool_call() -> None:
+    """
+    The model may answer in prose after reading a leaking result. The early
+    return for "no tool calls" would have dropped the finding with it.
+    """
+    upstream = _FakeOpenAI(_completion(content="Here they are."))
+    result = _gateway(upstream, phase=1).complete(_with_tool_result(_LEAKING_RESULT))
+
+    assert result["aetherya"]["tool_result_findings"]
+    assert result["aetherya"]["gated"] == []
+
+
+def test_only_tool_messages_are_scanned() -> None:
+    """
+    A key the operator typed is not a leak from a tool, and redacting the user's
+    own message would make the request unanswerable.
+    """
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    body = {"messages": [{"role": "user", "content": _LEAKING_RESULT}]}
+    result = _gateway(upstream, phase=2).complete(body)
+
+    assert result.get("aetherya", {}).get("tool_result_findings", []) == []
+    assert "sk-ant-api03" in upstream.requests[0]["messages"][0]["content"]
+
+
+def test_malformed_and_empty_tool_results_are_skipped() -> None:
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    body = {
+        "messages": [
+            "not a dict",
+            {"role": "tool", "content": None},
+            {"role": "tool", "content": "   "},
+            {"role": "tool", "content": 42},
+        ]
+    }
+    gateway = _gateway(upstream, phase=2)
+    assert gateway.scan_tool_results(body) == []
+
+
+def test_every_leaking_result_in_one_request_is_reported() -> None:
+    """A turn can carry several tool results; stopping at the first hides the rest."""
+    upstream = _FakeOpenAI(_completion(content="ok"))
+    body = {
+        "messages": [
+            {"role": "tool", "tool_call_id": "a", "content": _LEAKING_RESULT},
+            {"role": "tool", "tool_call_id": "b", "content": "ssh-rsa AAAA"},
+            {
+                "role": "tool",
+                "tool_call_id": "c",
+                "content": "-----BEGIN OPENSSH PRIVATE KEY-----",
+            },
+        ]
+    }
+    findings = _gateway(upstream, phase=2).scan_tool_results(body)
+    assert [f["tool_call_id"] for f in findings] == ["a", "c"]
