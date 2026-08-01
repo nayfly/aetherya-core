@@ -108,6 +108,25 @@ is what unblocks enforcement and who said what has to survive.
 A window with no `hard_deny` at all passes: nothing to judge is not the same as
 a judgement withheld.
 
+**Before changing the policy at all**, replay the candidate against the window
+you already have:
+
+```bash
+aetherya policy replay --candidate config/policy.next.yaml \
+                       --audit-path audit/decisions.jsonl
+```
+
+It reports what moves: decisions that get stricter (friction), decisions that
+get looser (where a regression hides), and any adversarial corpus case the
+candidate stops refusing. It exits non-zero only on the last — a tightened
+decision is not a fault, and gating on it would make every improvement fail the
+check meant to enable improvements.
+
+This is the test button on a circuit breaker: it does not tell you the policy is
+right, it tells you what changed. A policy nobody has replayed is a policy whose
+effect nobody has measured, and that holds whether a human wrote the change or
+something proposed it.
+
 **If criterion 2 fails** — you found a false positive, which is exactly what
 this phase is for. In order of preference:
 
