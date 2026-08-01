@@ -266,6 +266,11 @@ class PolicyConfig:
     intent_escalation: IntentEscalationConfig = field(default_factory=IntentEscalationConfig)
     rate_limit: RateLimitBackendConfig = field(default_factory=RateLimitBackendConfig)
     enforcement: EnforcementConfig = field(default_factory=EnforcementConfig)
+    # External runtime tool name -> canonical capability this policy is written
+    # against. Vocabulary translation belongs to the policy rather than to one
+    # gate: the execution gate and the capability matrix must agree on what a
+    # tool is, or one accepts `exec` while the other refuses it.
+    tool_aliases: dict[str, str] = field(default_factory=dict)
     effective_fingerprint: str | None = None
 
 
@@ -704,6 +709,22 @@ def load_policy_config(
         privileged_ops=list(_require(pg, "privileged_ops")),
     )
     execution_gate = _load_execution_gate(data.get("execution_gate"))
+
+    tool_aliases = {str(k): str(v) for k, v in dict(data.get("tool_aliases", {})).items()}
+    unmapped = sorted(
+        {
+            canonical
+            for canonical in tool_aliases.values()
+            if execution_gate.allowed_tools and canonical not in execution_gate.allowed_tools
+        }
+    )
+    if unmapped:
+        # An alias pointing at a tool the allowlist does not contain denies
+        # everything mapped to it, and reads as the runtime being rejected
+        # rather than the policy being wrong.
+        raise ValueError(
+            f"tool_aliases map to tools absent from execution_gate.allowed_tools: {unmapped}"
+        )
     capability_matrix = _load_capability_matrix(data.get("capability_matrix"))
     confirmation = _load_confirmation(data.get("confirmation"))
     llm_shadow = _load_llm_shadow(data.get("llm_shadow"))
@@ -721,6 +742,7 @@ def load_policy_config(
         aggregator=aggregator,
         procedural_guard=procedural_guard,
         execution_gate=execution_gate,
+        tool_aliases=tool_aliases,
         capability_matrix=capability_matrix,
         confirmation=confirmation,
         llm_shadow=llm_shadow,

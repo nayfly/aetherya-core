@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from aetherya.actions import ActionRequest
+from aetherya.actions import ActionRequest, canonical_tool
 from aetherya.config import ExecutionGateConfig
 
 
@@ -14,17 +14,23 @@ class ExecutionGateResult(TypedDict):
 
 
 class ExecutionGate:
-    def __init__(self, cfg: ExecutionGateConfig) -> None:
+    def __init__(
+        self, cfg: ExecutionGateConfig, tool_aliases: dict[str, str] | None = None
+    ) -> None:
         self.cfg = cfg
+        self.tool_aliases = tool_aliases or {}
 
     def evaluate(self, action: ActionRequest) -> ExecutionGateResult | None:
+        # `tool_aliases` is policy-level rather than gate-level: this gate and
+        # the capability matrix have to agree on what a tool is, or one accepts
+        # `exec` while the other refuses it.
         if not self.cfg.enabled:
             return None
 
         if action.intent != "operate":
             return None
 
-        tool = (action.tool or "").strip()
+        tool = canonical_tool(action, self.tool_aliases)
         target = (action.target or "").strip()
         params = action.parameters
 

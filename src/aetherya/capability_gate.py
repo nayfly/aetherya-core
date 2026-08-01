@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from aetherya.actions import ActionRequest
+from aetherya.actions import ActionRequest, canonical_tool
 from aetherya.config import CapabilityMatrixConfig
 
 
@@ -14,8 +14,13 @@ class CapabilityGateResult(TypedDict):
 
 
 class CapabilityGate:
-    def __init__(self, cfg: CapabilityMatrixConfig) -> None:
+    def __init__(
+        self, cfg: CapabilityMatrixConfig, tool_aliases: dict[str, str] | None = None
+    ) -> None:
         self.cfg = cfg
+        # Same map the execution gate uses. Two gates disagreeing about what a
+        # tool is denies ordinary work for a reason nobody can find.
+        self.tool_aliases = tool_aliases or {}
 
     def _actor_capabilities(self, actor: str) -> tuple[set[str], set[str], list[str]]:
         actor_id = actor.strip().lower()
@@ -63,7 +68,7 @@ class CapabilityGate:
                 "tags": ["capability_violation", "capability_unknown_role"],
             }
 
-        tool = (action.tool or "").strip().lower()
+        tool = canonical_tool(action, self.tool_aliases).lower()
         if actor_known and tool and tool not in tools:
             return {
                 "risk_score": 95,

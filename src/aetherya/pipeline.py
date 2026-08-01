@@ -459,7 +459,9 @@ def run_pipeline(
 
     # 2) Execution Gate (fail-closed si peta)
     try:
-        gate_result = ExecutionGate(_execution_gate_cfg(cfg)).evaluate(action)
+        gate_result = ExecutionGate(
+            _execution_gate_cfg(cfg), getattr(cfg, "tool_aliases", {})
+        ).evaluate(action)
         if gate_result:
             signals.append(
                 RiskSignal(
@@ -484,9 +486,9 @@ def run_pipeline(
 
     # 3) Capability Gate (fail-closed si peta)
     try:
-        capability_result = CapabilityGate(_capability_matrix_cfg(cfg)).evaluate(
-            actor=actor, action=action
-        )
+        capability_result = CapabilityGate(
+            _capability_matrix_cfg(cfg), getattr(cfg, "tool_aliases", {})
+        ).evaluate(actor=actor, action=action)
         if capability_result:
             signals.append(
                 RiskSignal(

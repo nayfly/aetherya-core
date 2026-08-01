@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -935,3 +937,126 @@ def test_constitution_config_gray_zone_exceeds_violation(tmp_path):
     path.write_text(yaml.dump(cfg_data))
     with pytest.raises(ValueError, match="semantic_gray_zone_threshold"):
         load_policy_config(path)
+
+
+# ---------------------------------------------------------------------------
+# Tool vocabulary translation
+# ---------------------------------------------------------------------------
+
+
+def test_an_alias_to_an_unlisted_tool_is_refused(tmp_path: Path) -> None:
+    """
+    An alias pointing at a capability the allowlist does not contain denies
+    everything mapped to it, and reads as the runtime being rejected rather
+    than the policy being wrong. Fail at load, where it is one line to fix.
+    """
+    data = yaml.safe_load(Path("config/policy.yaml").read_text(encoding="utf-8"))
+    data["tool_aliases"]["exec"] = "sandbox"  # never in allowed_tools
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="absent from execution_gate.allowed_tools"):
+        load_policy_config(path)
+
+
+def test_both_gates_resolve_the_same_alias(tmp_path: Path) -> None:
+    """
+    The execution gate and the capability matrix must agree on what a tool is.
+    When only one resolved aliases, `exec` passed the allowlist and was then
+    refused by the matrix — ordinary work denied for a reason nobody can find.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.capability_gate import CapabilityGate
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    action = ActionRequest(
+        raw_input="exec ls",
+        intent="operate",
+        tool="exec",
+        parameters={"command": "ls"},
+    )
+
+    assert ExecutionGate(cfg.execution_gate, cfg.tool_aliases).evaluate(action) is None
+    assert (
+        CapabilityGate(cfg.capability_matrix, cfg.tool_aliases).evaluate(
+            actor="robert", action=action
+        )
+        is None
+    )
+
+
+def test_an_unmapped_tool_is_still_refused(tmp_path: Path) -> None:
+    """The allowlist still means something: aliases widen vocabulary, not scope."""
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    result = ExecutionGate(cfg.execution_gate, cfg.tool_aliases).evaluate(
+        ActionRequest(raw_input="x", intent="operate", tool="browser", parameters={})
+    )
+    assert result is not None
+    assert "tool_not_allowed" in result["tags"]
+
+
+def test_provider_specific_parameters_do_not_escalate_ordinary_calls() -> None:
+    """
+    Observed on the first day of real traffic: `web_search` sends `language` and
+    `session_status` sends `sessionKey`. No policy can enumerate the metadata
+    every provider attaches, and none of it can carry a destructive payload —
+    enforcing a guessed list there escalated two ordinary calls.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+
+    for tool, params in [
+        ("web_search", {"query": "verifactu", "language": "es"}),
+        ("session_status", {"sessionKey": "current"}),
+        ("memory_get", {"path": "MEMORY.md", "lines": 30}),
+    ]:
+        action = ActionRequest(raw_input=tool, intent="operate", tool=tool, parameters=params)
+        assert gate.evaluate(action) is None, (tool, params)
+
+
+def test_shell_and_filesystem_still_enforce_their_parameters() -> None:
+    """
+    Relaxing the metadata groups must not relax the two where a stray parameter
+    is worth a second look.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+
+    for tool, params in [
+        ("exec", {"command": "ls", "surprise": "x"}),
+        ("write", {"path": "a.txt", "content": "x", "surprise": "x"}),
+    ]:
+        action = ActionRequest(raw_input=tool, intent="operate", tool=tool, parameters=params)
+        result = gate.evaluate(action)
+        assert result is not None, tool
+        assert "parameter_not_allowed" in result["tags"]
+
+
+def test_apply_patch_carries_its_patch_in_input() -> None:
+    """
+    Observed on first use: `apply_patch` sends the whole patch as `input`
+    rather than a path plus content, and escalated because the filesystem
+    parameter list did not know it.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+    action = ActionRequest(
+        raw_input="apply_patch",
+        intent="operate",
+        tool="apply_patch",
+        parameters={"input": "*** Begin Patch ***\n*** End Patch ***"},
+    )
+    assert gate.evaluate(action) is None
