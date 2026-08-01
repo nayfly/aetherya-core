@@ -593,12 +593,18 @@ def test_the_slim_policy_differs_only_in_the_semantic_layer() -> None:
     assert replace(docker.constitution_config, use_semantic=False) == slim.constitution_config
 
 
-def test_the_deployment_policy_differs_only_in_the_rate_limit_backend() -> None:
+def test_the_deployment_policy_differs_only_where_it_is_meant_to() -> None:
     """
     `config/policy.docker.yaml` exists so the container gets the distributed
-    limiter while the repo default keeps working with no infrastructure. Two
-    policy files is a drift hazard, so the difference is pinned to exactly one
-    field — anything else changing in one and not the other fails here.
+    limiter and cryptographically bound approvals, while the repo default keeps
+    working with no infrastructure at all. Two policy files is a drift hazard,
+    so the differences are pinned to exactly these two — anything else changing
+    in one and not the other fails here.
+
+    Signed proofs are on in the container because it ships the approval queue.
+    An approval that is not bound to the exact action is a token anyone can
+    type; the repo default stays off so `aetherya decide` needs no key
+    management to be useful.
     """
     from dataclasses import asdict
 
@@ -607,10 +613,107 @@ def test_the_deployment_policy_differs_only_in_the_rate_limit_backend() -> None:
 
     assert repo.rate_limit.backend == "memory"
     assert docker.rate_limit.backend == "redis"
+    assert repo.confirmation.evidence.signed_proof.enabled is False
+    assert docker.confirmation.evidence.signed_proof.enabled is True
 
-    ignored = {"policy_fingerprint", "effective_fingerprint", "rate_limit"}
+    ignored = {"policy_fingerprint", "effective_fingerprint", "rate_limit", "confirmation"}
     repo_fields = {k: v for k, v in asdict(repo).items() if k not in ignored}
     docker_fields = {k: v for k, v in asdict(docker).items() if k not in ignored}
     assert repo_fields == docker_fields
 
     assert replace(repo.rate_limit, backend="redis") == docker.rate_limit
+    # Confirmation must be identical apart from that one flag.
+    repo_evidence = repo.confirmation.evidence
+    docker_evidence = docker.confirmation.evidence
+    assert replace(
+        repo.confirmation,
+        evidence=replace(
+            repo_evidence,
+            signed_proof=replace(repo_evidence.signed_proof, enabled=True),
+        ),
+    ) == replace(
+        docker.confirmation,
+        evidence=replace(
+            docker_evidence,
+            signed_proof=replace(docker_evidence.signed_proof, enabled=True),
+        ),
+    )
+
+
+def test_the_image_installs_the_provider_sdks_the_gateway_needs() -> None:
+    """
+    Regression: the gateway runs from the same image as the decision service,
+    and that image installed only `[redis]`. With a valid API key in place every
+    completion came back 502 `anthropic is not installed` — a wiring gap that
+    reads like a network fault.
+
+    Optional extras for a library consumer; mandatory for this image, because
+    the gateway cannot reach an upstream without them.
+    """
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    install = next(
+        line for line in dockerfile.splitlines() if "pip install" in line and ".[" in line
+    )
+    for extra in ("redis", "llm", "anthropic"):
+        assert extra in install, f"{extra} missing from the image install: {install.strip()}"
+
+
+def test_the_gateway_service_gets_its_own_healthcheck() -> None:
+    """
+    The image healthcheck probes 8080 and asserts fields only the decision
+    service returns, so the gateway inherits a check it can never pass and sits
+    permanently unhealthy for a reason unrelated to its state.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    gateway_block = compose.split("  gateway:")[1]
+    assert "healthcheck:" in gateway_block
+    assert "8090/health" in gateway_block
+    assert "upstream_key_present" in gateway_block
+
+
+def test_compose_secrets_come_from_files_not_interpolation() -> None:
+    """
+    Compose gives an exported shell variable precedence over .env when the value
+    arrives as `${VAR}`, which silently defeated a key rotation three times.
+    `env_file` reads the file and ignores the shell.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "env_file:" in compose
+    for secret in (
+        "AETHERYA_CONSOLE_API_KEY",
+        "AETHERYA_APPROVALS_API_KEY",
+        "AETHERYA_CONFIRMATION_HMAC_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        assert f"{secret}: " not in compose, f"{secret} still arrives by interpolation"
+
+
+def test_the_published_ports_are_loopback_only() -> None:
+    """
+    In a container the app-level localhost check can never pass, so the port
+    publication is what actually keeps the admin routes and the upstream key
+    off the network.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:8080:8080"' in compose
+    assert '"127.0.0.1:8090:8090"' in compose
+
+
+def test_redis_is_not_published_to_the_network() -> None:
+    """
+    Regression, found by an agent reading its own deployment: redis was on
+    0.0.0.0 with no auth. It holds the confirmation replay store, so reachability
+    means an attacker can delete replay records and reuse an approval proof —
+    the single-use guarantee lives there, not only in the signature.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert '"127.0.0.1:6379:6379"' in compose
+    assert '"6379:6379"' not in compose
+
+
+def test_no_service_publishes_on_all_interfaces() -> None:
+    """One rule for the whole stack rather than three ports to remember."""
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    for name, service in compose["services"].items():
+        for mapping in service.get("ports", []):
+            assert str(mapping).startswith("127.0.0.1:"), f"{name} publishes {mapping} publicly"

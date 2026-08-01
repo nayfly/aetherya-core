@@ -18,3 +18,5 @@ CLAUDE.md
 demo.cast
 # Local secrets for the compose stack. Never commit.
 .env
+.env.provider
+RESUMEN-SESION.md

@@ -15,8 +15,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
+# The provider SDKs are here because the same image runs the gateway, which
+# cannot reach an upstream without them — installed, it answers; absent, every
+# completion is a 502 that reads like a network fault. They are optional extras
+# for a library consumer and mandatory for this image.
 RUN pip install --no-cache-dir -U pip \
-    && pip install --no-cache-dir ".[redis]"
+    && pip install --no-cache-dir ".[redis,llm,anthropic]"
 
 # Pre-download the sentence-transformers model into the image.
 ENV HF_HOME=/opt/models

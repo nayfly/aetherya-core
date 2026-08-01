@@ -10,7 +10,7 @@ from typing import Any
 
 from aetherya.audit import AuditLogger
 from aetherya.config import load_policy_config
-from aetherya.gateway import AetheryaGateway, GatewaySettings, UpstreamError
+from aetherya.gateway import _PROVIDERS, AetheryaGateway, GatewaySettings, UpstreamError
 
 DEFAULT_PORT = 8090
 MAX_BODY_BYTES = 4_194_304
@@ -54,14 +54,23 @@ class GatewayHTTPRequestHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path == "/health":
             gateway = self.gateway
+            # A gateway with no upstream credential answers every completion
+            # with a 502. Reporting that as healthy is a lie a readiness probe
+            # would believe, so the key is part of the contract rather than
+            # something you discover on the first real request.
+            key_present = False
+            if gateway is not None:
+                key_env = _PROVIDERS.get(gateway.settings.provider.strip().lower())
+                key_present = bool(key_env and os.getenv(key_env[0], "").strip())
             self._send_json(
                 200,
                 {
-                    "ok": gateway is not None,
+                    "ok": gateway is not None and key_present,
                     "provider": gateway.settings.provider if gateway else None,
                     "model": gateway.settings.model if gateway else None,
                     "phase": gateway.phase.number if gateway else None,
                     "phase_name": gateway.phase.name if gateway else None,
+                    "upstream_key_present": key_present,
                 },
             )
             return

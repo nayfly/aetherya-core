@@ -329,6 +329,7 @@ def serve_api(
     enable_approval_routes: bool = True,
     warmup_semantic: bool = True,
     require_semantic_ready: bool = False,
+    approval_sign_local_only: bool = True,
 ) -> None:
     warmup_semantic_layer(
         policy_path=policy_path,
@@ -345,6 +346,7 @@ def serve_api(
         enable_decide_routes=enable_decide_routes,
         enable_audit_routes=enable_audit_routes,
         enable_approval_routes=enable_approval_routes,
+        approval_sign_local_only=approval_sign_local_only,
     )
     api = AetheryaAPI(settings)
     server = build_server(
@@ -368,6 +370,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--constitution-path", default=None)
     parser.add_argument("--default-actor", default="robert")
     parser.add_argument("--max-body-bytes", type=int, default=1_048_576)
+    parser.add_argument(
+        "--approval-trust-network-boundary",
+        action="store_true",
+        help=(
+            "Stop requiring that admin requests arrive from 127.0.0.1. Necessary "
+            "in a container, where every client appears as the bridge gateway and "
+            "the check can never pass — publish the port as 127.0.0.1:PORT:PORT "
+            "so the host is the boundary instead. Do not set this on a service "
+            "whose port is reachable from anywhere else."
+        ),
+    )
     parser.add_argument(
         "--no-warmup-semantic",
         action="store_true",
@@ -423,6 +436,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_approval_routes=enable_approval_routes,
             warmup_semantic=not bool(args.no_warmup_semantic),
             require_semantic_ready=bool(args.require_semantic_ready),
+            approval_sign_local_only=not bool(args.approval_trust_network_boundary),
         )
         return 0
     except KeyboardInterrupt:
