@@ -235,6 +235,113 @@ def _detect_recursive_force_delete(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# PowerShell
+#
+# Every rule above reads POSIX shell. An agent driving a Windows host writes
+# `Remove-Item -Recurse -Force C:\` for what `rm -rf /` means, and that scored
+# 0 — the guard did not recognise a single destructive PowerShell form.
+#
+# Three properties make this harder than the POSIX side:
+#
+#   - Case is insignificant. The shared normalizer lowercases, so patterns are
+#     written lowercase and that is enough.
+#   - Cmdlets have aliases, and `rm`, `del` and `rd` are among them, so the
+#     same token means different things in each shell.
+#   - Parameters abbreviate to any unambiguous prefix: `-Recurse` is also
+#     `-recurse`, `-recurs`, `-rec`, `-r`. Matching the full word alone misses
+#     what an agent actually writes.
+#
+# And the normalizer strips backslashes before non-space, so `C:\Users\rober`
+# arrives as `c:usersrober`. Patterns must not depend on path separators.
+# ---------------------------------------------------------------------------
+
+# Remove-Item and its aliases. `rm` and `del` overlap with POSIX tokens, which
+# is harmless: the flag shapes below are PowerShell-specific.
+_PS_DELETE_CMDLET = r"(?:remove-item|ri\b|rd\b|rmdir\b|del\b|erase\b|rm\b)"
+
+# `-Recurse` / `-Force` accepting any unambiguous prefix, as PowerShell does.
+_PS_RECURSE = r"-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?\b"
+_PS_FORCE = r"-f(?:o(?:r(?:c(?:e)?)?)?)?\b"
+
+# Windows roots as they survive normalization. A drive root keeps its trailing
+# backslash only when a space follows it, so both spellings are accepted, and
+# the environment variables are matched by name because their expansion is not
+# visible here.
+_PS_ROOT_TARGET = (
+    r"(?:[a-z]:\\?(?=\s|$)"
+    r"|\$env:(?:userprofile|systemroot|systemdrive|windir|programfiles|appdata|homepath)"
+    r"|%(?:userprofile|systemroot|systemdrive|windir|appdata)%"
+    r"|\$home\b)"
+)
+
+
+def _detect_powershell_root_delete(text: str) -> bool:
+    """
+    Recursive, forced delete of a Windows root or user profile.
+
+    Both flags are required, in any order and any abbreviation, and the target
+    must be root-like — the same shape as the POSIX rule. Without the target
+    condition this would fire on `Remove-Item -Recurse -Force .\\build`, which
+    is ordinary cleanup and the most common thing an agent does.
+    """
+    for match in re.finditer(_PS_DELETE_CMDLET, text):
+        # One command only: a later pipeline stage is a different invocation.
+        segment = re.split(r"[|;&\n]", text[match.end() :], maxsplit=1)[0]
+        if not re.search(_PS_RECURSE, segment):
+            continue
+        if not re.search(_PS_FORCE, segment):
+            continue
+        if re.search(_PS_ROOT_TARGET, segment):
+            return True
+    return False
+
+
+_POWERSHELL_CRITICAL: tuple[ProceduralRule, ...] = (
+    _critical("powershell_root_delete", detector=_detect_powershell_root_delete),
+    _critical(
+        # Destroys a volume as thoroughly as mkfs. `-Force` is not required:
+        # these prompt interactively, and an agent supplies confirmation.
+        "powershell_volume_format",
+        pattern=r"\b(?:format-volume|clear-disk|initialize-disk|reset-physicaldisk)\b",
+    ),
+    _critical(
+        # cmd.exe rather than PowerShell, reachable from the same exec tool.
+        "windows_format_command",
+        pattern=r"\bformat\s+[a-z]:\s",
+    ),
+    _critical(
+        "windows_partition_wipe",
+        pattern=r"\bdiskpart\b[^|;&]{0,80}?\bclean\b",
+    ),
+)
+
+_POWERSHELL_ELEVATED: tuple[ProceduralRule, ...] = (
+    ProceduralRule(
+        tag="remote_code_execution",
+        risk_score=70,
+        confidence=0.9,
+        reason="remote script piped into a shell",
+        extra_tags=("system_change",),
+        # `iwr https://x/s.ps1 | iex` is the PowerShell idiom for curl | sh, and
+        # is what every Windows install one-liner looks like.
+        pattern=re.compile(
+            r"\b(?:iwr|irm|invoke-webrequest|invoke-restmethod|curl|wget)\b"
+            r"[^|;&]{0,200}\|\s*(?:iex\b|invoke-expression\b)"
+        ),
+    ),
+    ProceduralRule(
+        tag="remote_code_execution",
+        risk_score=70,
+        confidence=0.9,
+        reason="remote script downloaded and evaluated",
+        extra_tags=("system_change",),
+        # The single-expression form, which has no pipe to anchor on.
+        pattern=re.compile(r"\biex\b[^|;&]{0,40}?\(\s*(?:new-object\s+net\.webclient|iwr|irm)"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # Rule families
 #
 # Keyed by the literal that appears in `procedural_guard.critical_tags` in
@@ -291,6 +398,7 @@ _CRITICAL_FAMILIES: dict[str, tuple[ProceduralRule, ...]] = {
             pattern=r"\bfind\s+/\s[^|;&]{0,80}?-delete\b",
         ),
     ),
+    "powershell_destruction": _POWERSHELL_CRITICAL,
 }
 
 _ELEVATED_FAMILIES: dict[str, tuple[ProceduralRule, ...]] = {
@@ -313,6 +421,7 @@ _ELEVATED_FAMILIES: dict[str, tuple[ProceduralRule, ...]] = {
             extra_tags=("system_change",),
             pattern=re.compile(r"\b(?:curl|wget)\b[^|;&]{0,200}\|\s*(?:sudo\s+)?[a-z]{0,3}sh\b"),
         ),
+        *_POWERSHELL_ELEVATED,
     ),
 }
 
