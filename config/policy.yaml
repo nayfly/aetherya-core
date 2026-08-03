@@ -71,8 +71,14 @@ tool_aliases:
   # this is where the POSIX and PowerShell rules do their work.
   exec: shell
   bash: shell
-  process: shell
   code_execution: shell
+
+  # `process` sits in the same OpenClaw group but does not execute anything: it
+  # inspects and signals commands already running, carrying `action`,
+  # `sessionId` and `timeout`. Mapping it to `shell` inherited the requirement
+  # for a `command` it never sends, so every call escalated — measured in the
+  # first shadow window, three escalations out of three calls.
+  process: runtime
 
   # group:fs - reads and writes to workspace files. The path matters.
   read: filesystem

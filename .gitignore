@@ -21,3 +21,6 @@ demo.cast
 .env.provider
 RESUMEN-SESION.md
 RESUMEN-SESION-2.md
+# The live policy the containers read. Tracked directory, untracked contents:
+# git must not be able to reconfigure a running engine by changing branches.
+deploy/policy/*.yaml

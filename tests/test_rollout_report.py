@@ -115,10 +115,11 @@ def test_insufficient_window_fails_the_criterion(tmp_path: Path) -> None:
     assert "3 decisions" in window.detail
 
 
-def test_enough_decisions_satisfies_the_window(tmp_path: Path) -> None:
+def test_enough_decisions_alone_does_not_satisfy_the_window(tmp_path: Path) -> None:
+    """Volume without elapsed time is one busy afternoon, not a measurement."""
     path = _audit(tmp_path, [("a", "allow", "ok")] * 5)
     report = build_report(path, min_decisions=5, min_days=999.0)
-    assert next(c for c in report.criteria if c.name == "sufficient_window").passed is True
+    assert next(c for c in report.criteria if c.name == "sufficient_window").passed is False
 
 
 def test_mixed_policy_fingerprints_fail_the_criterion(tmp_path: Path) -> None:
@@ -503,3 +504,48 @@ def test_a_tool_with_parameters_lists_them(
     _print_text(build_report(path, min_decisions=1, min_days=0.0))
     out = capsys.readouterr().out
     assert "params: command, timeout" in out
+
+
+def _spanning_trail(path: Path, count: int, span_days: float) -> Path:
+    """A trail whose events are spread over a real span, not written all at once."""
+    base = datetime.now(UTC) - timedelta(days=span_days)
+    step = span_days / max(count - 1, 1)
+    rows = [
+        {
+            "ts": (base + timedelta(days=step * i)).isoformat(),
+            "actor": "a",
+            "action": "x",
+            "decision": {"allowed": True, "risk_score": 0, "reason": "ok", "state": "allow"},
+            "context": {},
+        }
+        for i in range(count)
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    return path
+
+
+def test_a_quiet_fortnight_is_not_a_measured_window(tmp_path: Path) -> None:
+    """
+    The criterion was `or`, so fourteen idle days with three decisions passed
+    and cleared the way to enforcement on no evidence at all. Time and volume
+    each answer half of it: whether usage varied, and whether there was any
+    usage to vary.
+    """
+    quiet = _spanning_trail(tmp_path / "quiet.jsonl", count=3, span_days=20.0)
+    window = next(
+        c
+        for c in build_report(quiet, min_decisions=200, min_days=14.0).criteria
+        if c.name == "sufficient_window"
+    )
+    assert window.passed is False
+    assert "and" in window.detail
+
+    both = _spanning_trail(tmp_path / "both.jsonl", count=400, span_days=20.0)
+    assert (
+        next(
+            c
+            for c in build_report(both, min_decisions=200, min_days=14.0).criteria
+            if c.name == "sufficient_window"
+        ).passed
+        is True
+    )

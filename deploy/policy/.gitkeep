@@ -1,0 +1,14 @@
+This directory is what the running containers read their policy from.
+
+It is tracked so the bind mount always has a real directory to point at — an
+absent source makes Docker invent a root-owned empty one, and the container
+then fails to load a policy for a reason that looks like a permissions bug.
+
+The policy files inside are deliberately NOT tracked (see .gitignore). That is
+the whole point: config/ is a git working tree, and mounting it into a running
+engine means every checkout, merge and branch switch silently reconfigures
+production. Three distinct policy fingerprints appeared in the first shadow
+window that way, none of them from anyone editing a policy.
+
+Populate it deliberately:   make deploy_policy
+See what is actually live:  make deploy_policy_status

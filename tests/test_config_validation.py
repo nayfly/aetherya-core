@@ -1060,3 +1060,35 @@ def test_apply_patch_carries_its_patch_in_input() -> None:
         parameters={"input": "*** Begin Patch ***\n*** End Patch ***"},
     )
     assert gate.evaluate(action) is None
+
+
+def test_process_manages_commands_it_does_not_run_them() -> None:
+    """
+    Measured in the first shadow window: three `process` calls, three
+    escalations. It sits in OpenClaw's runtime group beside `exec`, so it was
+    mapped to `shell` — which requires a `command`. `process` inspects and
+    signals commands already running and carries `action`, `sessionId` and
+    `timeout` instead, so the requirement could never be met and every call
+    escalated on a missing parameter.
+    """
+    from aetherya.actions import ActionRequest
+    from aetherya.execution_gate import ExecutionGate
+
+    cfg = load_policy_config("config/policy.yaml")
+    gate = ExecutionGate(cfg.execution_gate, cfg.tool_aliases)
+    action = ActionRequest(
+        raw_input="process",
+        intent="operate",
+        tool="process",
+        parameters={"action": "list", "sessionId": "s-1", "timeout": 30},
+    )
+    assert gate.evaluate(action) is None
+
+    # The mapping must not have quietly retired the requirement for the tools
+    # that do run commands — that is the whole reason `shell` asks for one.
+    running = ActionRequest(
+        raw_input="exec", intent="operate", tool="exec", parameters={"timeout": 30}
+    )
+    result = gate.evaluate(running)
+    assert result is not None
+    assert "missing_required_parameter" in result["tags"]

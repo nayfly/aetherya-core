@@ -3,9 +3,10 @@ from __future__ import annotations
 import hmac
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from aetherya.actions import ActionRequest, validate_action_request, validate_actor
 from aetherya.approval_proof import (
@@ -166,6 +167,19 @@ def _header_value(headers: dict[str, Any] | None, key: str) -> str:
         if str(raw_key).strip().lower() == target:
             return str(raw_value).strip()
     return ""
+
+
+_T = TypeVar("_T", int, float)
+
+
+def _threshold(raw: object, default: _T, cast: Callable[[Any], _T]) -> _T:
+    """A rollout threshold from a query string, where an explicit 0 is a value."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return default
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 class AetheryaAPI:
@@ -780,9 +794,12 @@ class AetheryaAPI:
             report = build_report(
                 self.settings.audit_path,
                 current_phase=phase,
-                min_decisions=int(query.get("min_decisions", DEFAULT_MIN_DECISIONS) or 0)
-                or DEFAULT_MIN_DECISIONS,
-                min_days=float(query.get("min_days", DEFAULT_MIN_DAYS) or 0) or DEFAULT_MIN_DAYS,
+                # `or DEFAULT` would read an explicit zero as "not supplied" and
+                # silently restore the default, so the one value an operator
+                # sends to widen the window was the one value it ignored. Absent
+                # and empty fall back; anything else is taken at its word.
+                min_decisions=_threshold(query.get("min_decisions"), DEFAULT_MIN_DECISIONS, int),
+                min_days=_threshold(query.get("min_days"), DEFAULT_MIN_DAYS, float),
                 review_path=self.settings.review_path,
                 # The console must render on a deployment that has decided nothing yet.
                 allow_missing_audit=True,

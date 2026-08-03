@@ -61,8 +61,16 @@ services:
       # The audit chain must survive the container. Without this, every restart
       # begins a new chain and the old one is gone.
       - audit-data:/app/audit
-      # Edit config/policy.yaml on the host and restart to apply.
-      - ./config:/app/config:ro
+      # NOT ./config. That is a git working tree, and mounting it into a running
+      # engine means every checkout, merge and branch switch silently swaps the
+      # policy underneath live traffic. The first shadow window recorded three
+      # distinct policy fingerprints in two days, none of them from anyone
+      # editing a policy — which invalidates the window, because a mixed window
+      # measures more than one engine.
+      #
+      #   make deploy_policy         apply config/policy.docker.yaml here
+      #   make deploy_policy_status  show whether the live policy has drifted
+      - ./deploy/policy:/app/config:ro
     command:
       - aetherya-api
       - --host=0.0.0.0
@@ -105,7 +113,10 @@ services:
       - .env.provider
     volumes:
       - audit-data:/app/audit
-      - ./config:/app/config:ro
+      # Same deployed policy as the decision service, for the same reason. Both
+      # must read the same one: two services on different policies write one
+      # audit trail and the window can never show a single fingerprint.
+      - ./deploy/policy:/app/config:ro
     command:
       - aetherya-gateway
       - --host=0.0.0.0
