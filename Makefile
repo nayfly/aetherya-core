@@ -1,4 +1,4 @@
-.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve api_decision_serve api_approvals_serve gateway_serve gateway_smoke policy_replay
+.PHONY: fmt lint type test cov check security_baseline chaos_benchmark pipeline_benchmark pipeline_memory_soak property_tests audit_fuzz openai_shadow_smoke pre_api_gate api_serve api_decision_serve api_approvals_serve gateway_serve gateway_smoke policy_replay deploy_policy deploy_policy_status
 
 fmt:
 	ruff format src tests
@@ -67,3 +67,23 @@ api_stop:
 	-fuser -k 8081/tcp || true
 
 api_restart: api_stop api_serve
+
+# The containers read their policy from deploy/policy/, not from config/.
+# Applying a policy is therefore a deliberate act rather than a side effect of
+# a checkout — see deploy/policy/.gitkeep.
+deploy_policy:
+	@cp config/policy.docker.yaml deploy/policy/policy.docker.yaml
+	@echo "deployed: config/policy.docker.yaml -> deploy/policy/"
+	@python -m aetherya.cli policy fingerprint --policy-path deploy/policy/policy.docker.yaml --json \
+	  | python -c 'import sys,json; print("fingerprint:", json.load(sys.stdin)["effective_fingerprint"])'
+	@echo "restart to apply:  docker compose up -d"
+	@echo "NOTE: this restarts the measurement window — the engine changes identity."
+
+deploy_policy_status:
+	@if [ ! -f deploy/policy/policy.docker.yaml ]; then \
+	  echo "no policy deployed — run: make deploy_policy"; exit 1; fi
+	@if diff -q config/policy.docker.yaml deploy/policy/policy.docker.yaml >/dev/null; then \
+	  echo "live policy matches the repo"; \
+	else \
+	  echo "DRIFT: the live policy differs from config/policy.docker.yaml"; \
+	  diff -u deploy/policy/policy.docker.yaml config/policy.docker.yaml | head -40; fi

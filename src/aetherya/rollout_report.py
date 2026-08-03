@@ -25,7 +25,17 @@ from aetherya.review_store import FALSE_POSITIVE, ReviewStore
 # See docs/rollout-phases.md.
 # ---------------------------------------------------------------------------
 
-DEFAULT_MIN_DECISIONS = 10_000
+# Both are required, not either. As `or`, a window of fourteen quiet days and
+# three decisions passed — a criterion that approves enforcement on no evidence,
+# which is the same defect as a review gate that passes with nothing reviewed.
+# Time alone proves nothing if the agent was idle, and volume alone proves
+# nothing if it all arrived in one afternoon.
+#
+# 200 rather than 10 000 because the original number assumed production traffic.
+# A single agent on one machine produces on the order of fifteen decisions a
+# day, so 10 000 under an `and` would mean roughly two years and the phase gate
+# would never open. Raise it with --min-decisions where the volume justifies it.
+DEFAULT_MIN_DECISIONS = 200
 DEFAULT_MIN_DAYS = 14.0
 
 
@@ -259,14 +269,14 @@ def build_report(
 def _evaluate_criteria(
     report: RolloutReport, *, min_decisions: int, min_days: float
 ) -> list[Criterion]:
-    volume_ok = report.total_decisions >= min_decisions or report.window_days >= min_days
+    volume_ok = report.total_decisions >= min_decisions and report.window_days >= min_days
     criteria = [
         Criterion(
             name="sufficient_window",
             passed=volume_ok,
             detail=(
                 f"{report.total_decisions} decisions over {report.window_days:.1f} days "
-                f"(need {min_decisions} or {min_days:.0f} days)"
+                f"(need {min_decisions} and {min_days:.0f} days)"
             ),
         ),
         Criterion(

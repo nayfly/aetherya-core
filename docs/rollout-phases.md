@@ -75,7 +75,12 @@ the source for the rest.
 
 **Exit criteria — all of them:**
 
-1. At least 2 weeks, or 10 000 decisions, whichever is later.
+1. At least 14 days **and** at least 200 decisions. Both, not either: time
+   alone proves nothing if the agent sat idle, and volume alone proves
+   nothing if it all arrived in one afternoon. Raise the count with
+   `--min-decisions` where the traffic justifies it — 200 is sized for a
+   single agent on one machine, which produces on the order of fifteen
+   decisions a day.
 2. **Every** `hard_deny` event reviewed by a human and confirmed a true positive.
    Not a sample — every one. There will not be many; that is the point of the
    tier.

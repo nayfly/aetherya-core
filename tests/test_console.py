@@ -897,3 +897,28 @@ def test_the_empty_feed_says_what_to_do_about_it() -> None:
     html = console_html()
     assert "waiting for traffic" in html
     assert "aetherya decide" in html
+
+
+def test_an_explicit_zero_threshold_is_not_a_missing_one(tmp_path: Path) -> None:
+    """
+    The thresholds coalesced with `or DEFAULT`, which reads an explicit 0 as
+    "not supplied" and quietly restores the default — so the one value an
+    operator sends to widen the window was the one value that was ignored, and
+    the report answered a question nobody asked.
+    """
+    audit = tmp_path / "decisions.jsonl"
+    _seed(audit, [("a", "allow")] * 3)
+    api = _api(tmp_path, audit)
+
+    def window(query: dict[str, object]) -> dict[str, Any]:
+        body = api.rollout(query)[1]
+        return next(c for c in body["report"]["criteria"] if c["name"] == "sufficient_window")
+
+    assert window({"min_decisions": 1, "min_days": 0.0})["passed"] is True
+    # Absent and empty still fall back, which is what the console sends.
+    assert "200 and 14 days" in window({})["detail"]
+    assert "200 and 14 days" in window({"min_days": ""})["detail"]
+    # A threshold that is not a number falls back rather than 500ing the page:
+    # the console renders the report, and a bad query string is the operator's
+    # typo, not a reason to lose the whole panel.
+    assert "200 and 14 days" in window({"min_decisions": "many", "min_days": "soon"})["detail"]
